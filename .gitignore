@@ -116,3 +116,11 @@ bin/act
 # Sphinx documentation
 docs/_build/
 docs/build/
+
+*.zip
+*.dat
+*.kg
+*ml-1m*
+*.md
+*.png
+*.jpg
