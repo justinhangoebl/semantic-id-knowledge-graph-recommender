@@ -160,6 +160,104 @@ class KGGLMDataset(KnowledgePathDataset):
 
     def generate_pretrain_dataset(self):
         """Generate pretrain dataset for KGGLM model."""
+        import os, pickle
+        saved_paths_file = "paths_ml_1m.pickle"
+        if os.path.exists(saved_paths_file):
+            with open(saved_paths_file, "rb") as f:
+                self._path_dataset = pickle.load(f)
+            return 
+
+        if self._path_dataset is None:
+            graph = self._create_ckg_igraph(show_relation=True, directed=False)
+            kg_rel_num = len(self.relations)
+            graph.es["weight"] = [0.0] * (self.inter_num) + [1.0] * kg_rel_num
+
+            graph_min_iid = 1 + self.user_num
+            min_hop, max_hop = self.pretrain_hop_length
+            max_tries_per_entity = self.config["path_sample_args"]["MAX_RW_TRIES_PER_IID"]
+
+            entities = list(range(graph_min_iid + 1, len(graph.vs)))
+
+            kwargs = dict(
+                graph=graph,
+                min_hop=min_hop,
+                max_hop=max_hop,
+                pretrain_paths=self.pretrain_paths,
+                max_tries_per_entity=max_tries_per_entity,
+            )
+
+            if not self.parallel_max_workers:
+                iter_paths = progress_bar(
+                    entities,
+                    ncols=100,
+                    desc=set_color("KGGLM Pre-training Path Sampling", "red", progress=True),
+                )
+                all_paths = []
+                for entity in iter_paths:
+                    local_paths = _generate_paths_random_walks(entity, **kwargs)
+                    all_paths.extend(local_paths)
+            else:
+                # Collect all paths from workers
+                results = joblib.Parallel(
+                    n_jobs=self.parallel_max_workers, 
+                    prefer="threads"
+                )(
+                    joblib.delayed(_generate_paths_random_walks)(entity, **kwargs) 
+                    for entity in entities
+                )
+                # Flatten list of lists
+                all_paths = [path for local_paths in results for path in local_paths]
+
+            paths_with_relations = self._add_paths_relations(graph, all_paths)
+
+            # More efficient string building
+            path_strings = [self._format_path(path) for path in paths_with_relations]
+            path_string = "\n".join(path_strings)
+            
+            with open(saved_paths_file, "wb") as f:
+                pickle.dump(path_string, f)
+
+            self._path_dataset = path_string
+
+
+def _generate_paths_random_walks(start_node, **kwargs):
+    graph = kwargs.get("graph")
+    min_hop = kwargs.get("min_hop")
+    max_hop = kwargs.get("max_hop")
+    pretrain_paths = kwargs.get("pretrain_paths")
+    max_tries_per_entity = kwargs.get("max_tries_per_entity")
+    
+    # Only need local deduplication per start_node
+    local_paths = set()
+
+    for _ in range(pretrain_paths):
+        path_hop_length = np.random.randint(min_hop, max_hop + 1)
+        tries_per_entity = max_tries_per_entity
+
+        generated_path = None
+        while tries_per_entity > 0:
+            generated_path = tuple(
+                graph.random_walk(start_node, path_hop_length, weights="weight")
+            )
+            if generated_path not in local_paths:
+                local_paths.add(generated_path)
+                break
+            tries_per_entity -= 1
+        else:
+            # If exhausted tries, add anyway
+            if generated_path:
+                local_paths.add(generated_path)
+    
+    return list(local_paths)  # Return as list for easier flattening
+
+"""     def generate_pretrain_dataset(self):
+        Generate pretrain dataset for KGGLM model.
+        import os, pickle
+        saved_paths_file = "paths_5_5_500.pickle"
+        if os.path.exists(saved_paths_file):
+            with open(saved_paths_file, "rb") as f:
+                self._path_dataset = pickle.load(f)
+            return 
 
         if self._path_dataset is None:
             graph = self._create_ckg_igraph(show_relation=True, directed=False)
@@ -189,17 +287,21 @@ class KGGLMDataset(KnowledgePathDataset):
 
             if not self.parallel_max_workers:
                 for entity in iter_paths:
-                    _generate_paths_random_walks(entity)
+                    _generate_paths_random_walks(entity, **kwargs)
             else:
-                joblib.Parallel(n_jobs=self.parallel_max_workers, prefer="threads", return_as="generator")(
+                # Fixed: removed return_as="generator" and consume results properly
+                list(joblib.Parallel(n_jobs=self.parallel_max_workers, prefer="threads")(
                     joblib.delayed(_generate_paths_random_walks)(entity, **kwargs) for entity in iter_paths
-                )
+                ))
 
             paths_with_relations = self._add_paths_relations(graph, paths)
 
             path_string = ""
             for path in paths_with_relations:
                 path_string += self._format_path(path) + "\n"
+                
+            with open(saved_paths_file, "wb") as f:
+                pickle.dump(path_string, f)
 
             self._path_dataset = path_string
 
@@ -211,7 +313,10 @@ def _generate_paths_random_walks(start_node, **kwargs):
     pretrain_paths = kwargs.get("pretrain_paths")
     max_tries_per_entity = kwargs.get("max_tries_per_entity")
     paths = kwargs.get("paths")
-
+    
+    # Use local set for faster duplicate checking per entity
+    local_paths = set()
+    
     for _ in range(pretrain_paths):
         path_hop_length = np.random.randint(min_hop, max_hop + 1)
         tries_per_entity = max_tries_per_entity
@@ -219,11 +324,18 @@ def _generate_paths_random_walks(start_node, **kwargs):
         while tries_per_entity > 0:
             generated_path = graph.random_walk(start_node, path_hop_length, weights="weight")
             generated_path = tuple(generated_path)
-            if generated_path not in paths:
+            # Check local set first (much faster), then global
+            if generated_path not in local_paths:
+                local_paths.add(generated_path)
                 break
             tries_per_entity -= 1
-
-        paths.add(generated_path)
+        else:
+            # If we exhausted tries, add the last path anyway
+            if generated_path:
+                local_paths.add(generated_path)
+    
+    # Add all local paths to global set at once (thread-safe with GIL)
+    paths.update(local_paths) """
 
 
 class TPRecTimestampDataset:

@@ -527,7 +527,7 @@ def user_parallel_sampling(sampling_func_factory):
             tqdm_object.close()
 
     def wrapper(*args, **kwargs):
-        user_num = kwargs.get("user_num", None)
+        user_num = kwargs.get("user_num", 1)
         tqdm_kws = dict(
             total=user_num - 1,
             ncols=100,

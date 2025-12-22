@@ -306,6 +306,10 @@ class KnowledgePathDataset(KnowledgeBasedDataset):
         if self._path_dataset is None:
             generated_paths = self.generate_user_paths()
 
+            # Convert set to list if needed
+            if isinstance(generated_paths, set):
+                generated_paths = list(generated_paths)
+            
             path_string = ""
             for path in generated_paths:
                 path_string += self._format_path(path) + "\n"

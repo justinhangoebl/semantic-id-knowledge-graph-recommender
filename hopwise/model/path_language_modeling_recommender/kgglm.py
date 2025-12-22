@@ -39,4 +39,30 @@ class KGGLM(PEARLM):
 
             self.logger.info(f"Load pretrained model from {self.pre_model_path}")
             weights = load_file(os.path.join(self.pre_model_path, "model.safetensors"))
+
+            # Adapt positional embeddings (wpe) if context_length changed between
+            # pretraining and finetuning. When the number of positions differs,
+            # we either slice the pretrained matrix or fall back to the newly
+            # initialized one so that load_state_dict does not raise a size error.
+            wpe_key = "transformer.wpe.weight"
+            if wpe_key in weights:
+                try:
+                    current_wpe = self.transformer.wpe.weight
+                except AttributeError:
+                    current_wpe = None
+
+                pretrained_wpe = weights[wpe_key]
+                if current_wpe is not None and pretrained_wpe.shape != current_wpe.shape:
+                    if pretrained_wpe.shape[1] == current_wpe.shape[1]:
+                        # Same embedding dim, different number of positions: copy
+                        # as many positions as possible and keep the rest
+                        # from the current (randomly initialised) matrix.
+                        min_len = min(pretrained_wpe.shape[0], current_wpe.shape[0])
+                        new_wpe = current_wpe.clone()
+                        new_wpe[:min_len] = pretrained_wpe[:min_len]
+                        weights[wpe_key] = new_wpe
+                    else:
+                        # Embedding dimension changed; skip loading wpe.
+                        weights.pop(wpe_key)
+
             self.load_state_dict(weights, strict=False)

@@ -1,28 +1,28 @@
 # Environment Settings
-gpu_id: '0'                     # (str) The id of GPU device(s).
+gpu_id: '1'                     # (str) The id of GPU device(s).
 worker: 0                       # (int) The number of workers processing the data.
 use_gpu: True                   # (bool) Whether or not to use GPU.
 seed: 2024                      # (int) Random seed.
 state: INFO                     # (str) Logging level.
 reproducibility: True           # (bool) Whether or not to make results reproducible.
-data_path: 'dataset/'           # (str) The path of input dataset.
+data_path: './dataset/'           # (str) The path of input dataset.
 checkpoint_dir: 'saved'         # (str) The path to save checkpoint file.
 show_progress: True             # (bool) Whether or not to show the progress bar of every epoch.
 save_dataset: False             # (bool) Whether or not to save filtered dataset.
 dataset_save_path: ~            # (str) The path of saved dataset.
-save_dataloaders: False         # (bool) Whether or not save split dataloaders.
-dataloaders_save_path: ~        # (str) The path of saved dataloaders.
-log_wandb: False                # (bool) Whether or not to use Weights & Biases(W&B).
-wandb_project: 'hopwise'        # (str) The project to conduct experiments in W&B.
+save_dataloaders: True         # (bool) Whether or not save split dataloaders.
+dataloaders_save_path: './dataloader/' # (str) The path of saved dataloaders.
+log_wandb: True                # (bool) Whether or not to use Weights & Biases(W&B).
+wandb_project: 'KGGLM - Pretrain'        # (str) The project to conduct experiments in W&B.
 progress_bar_rich: True         # (bool) Whether or not to use rich progress bar.
 shuffle: True                   # (bool) Whether or not to shuffle the training data before each epoch.
 weight_precision: float32
 
 # Training Settings
 epochs: 300                     # (int) The number of training epochs.
-train_batch_size: 2048          # (int) The training batch size.
+train_batch_size: 256          # (int) The training batch size.
 learner: adam                   # (str) The name of used optimizer.
-learning_rate: 0.001            # (float) Learning rate.
+learning_rate: 0.0002            # (float) Learning rate.
 train_neg_sample_args:          # (dict) Negative sampling configuration for model training.
   distribution: uniform         # (str) The distribution of negative items.
   sample_num: 1                 # (int) The sampled num of negative items.
@@ -51,5 +51,5 @@ metrics: ["Recall","MRR","NDCG","Hit","Precision"]  # (list or str) Evaluation m
 topk: [10]                      # (list or int or None) The value of k for topk evaluation metrics.
 valid_metric: NDCG@10           # (str) The evaluation metric for early stopping.
 valid_metric_bigger: True       # (bool) Whether to take a bigger valid metric value as a better result.
-eval_batch_size: 4096           # (int) The evaluation batch size.
+eval_batch_size: 64           # (int) The evaluation batch size.
 metric_decimal_place: 4         # (int) The decimal place of metric scores.

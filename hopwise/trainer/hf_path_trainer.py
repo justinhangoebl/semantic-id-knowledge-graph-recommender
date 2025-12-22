@@ -76,6 +76,34 @@ class HopwiseCallback(TrainerCallback):
             self.train_data.get_model(self.hopwise_trainer.model)
         self.valid_step = 0
 
+        # Optional baseline evaluation before the first training epoch.
+        # This evaluates the (pretrained) model on the validation set at
+        # "epoch 0" so we can compare fine-tuning improvements against it.
+        if self.valid_data is not None:
+            epoch_idx = 0
+            self.valid_start_time = time()
+            valid_score, valid_result = self.hopwise_trainer._valid_epoch(
+                self.valid_data, show_progress=self.show_progress
+            )
+            valid_end_time = time()
+            valid_score_output = (
+                set_color("epoch %d evaluating (baseline)", "green")
+                + " ["
+                + set_color("time", "blue")
+                + ": %.2fs, "
+                + set_color("valid_score", "blue")
+                + ": %f]"
+            ) % (epoch_idx, valid_end_time - self.valid_start_time, valid_score)
+            valid_result_output = set_color("valid result (baseline)", "blue") + ": \n" + dict2str(valid_result)
+            if self.verbose:
+                self.hopwise_trainer.logger.info(valid_score_output)
+                self.hopwise_trainer.logger.info(valid_result_output)
+            self.hopwise_trainer.tensorboard.add_scalar("Valid_score", valid_score, epoch_idx)
+            self.hopwise_trainer.wandblogger.log_metrics(
+                {**valid_result, "valid_step": self.valid_step}, head="valid"
+            )
+            self.valid_step += 1
+
     def on_train_end(self, args, state, control, **kwargs):
         self.hopwise_trainer._add_hparam_to_tensorboard(self.hopwise_trainer.best_valid_score)
         return super().on_train_end(args, state, control, **kwargs)
@@ -138,6 +166,42 @@ class HopwiseCallback(TrainerCallback):
         if self.hopwise_trainer.gpu_available and self.show_progress:
             gpu_usage = get_gpu_usage(self.hopwise_trainer.device)
             self.progress_bar.set_postfix_str(set_color("GPU RAM: " + gpu_usage, "yellow"))
+
+        # Log per-batch loss to W&B and capture initial loss at first step
+        try:
+            if state.log_history and isinstance(state.log_history[-1], dict):
+                last_log = state.log_history[-1]
+                if "loss" in last_log:
+                    loss_val = float(last_log["loss"])
+                    is_rank0 = self.hopwise_trainer.config["single_spec"] or self.hopwise_trainer.config.get("local_rank", 0) == 0
+                    if is_rank0:
+                        # Per-batch logging
+                        self.hopwise_trainer.wandblogger.log_metrics(
+                            {
+                                "epoch": int(state.epoch or 0),
+                                "global_step": state.global_step,
+                                "batch_loss": loss_val,
+                                # Ensure W&B uses a consistent step metric for all train/* logs
+                                "train_step": state.global_step,
+                            },
+                            head="train",
+                        )
+                        # Initial loss at first global step
+                        if state.global_step == 1:
+                            self.hopwise_trainer.logger.info(set_color(f"Initial batch loss: {loss_val:.6f}", "blue"))
+                            self.hopwise_trainer.tensorboard.add_scalar("Loss/Initial", loss_val, int(state.epoch or 0))
+                            self.hopwise_trainer.wandblogger.log_metrics(
+                                {
+                                    "epoch": int(state.epoch or 0),
+                                    "initial_loss": loss_val,
+                                    "global_step": state.global_step,
+                                    "train_step": state.global_step,
+                                },
+                                head="train",
+                            )
+        except Exception:
+            # Swallow logging errors to avoid disrupting training
+            pass
 
         if state.global_step >= state.max_steps:
             control.should_training_stop = True

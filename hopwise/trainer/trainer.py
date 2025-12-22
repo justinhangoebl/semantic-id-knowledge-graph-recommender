@@ -257,6 +257,29 @@ class Trainer(AbstractTrainer):
                 loss = losses
                 total_loss = losses.item() if total_loss is None else total_loss + losses.item()
             self._check_nan(loss)
+
+            # Log initial loss (first batch of first epoch) and per-batch loss to W&B
+            try:
+                is_rank0 = self.config["single_spec"] or self.config.get("local_rank", 0) == 0
+                batch_loss_val = float(loss.detach().item())
+                if is_rank0:
+                    # Per-batch loss logging to W&B
+                    self.wandblogger.log_metrics(
+                        {"epoch": epoch_idx, "batch_idx": batch_idx, "batch_loss": batch_loss_val},
+                        head="train",
+                    )
+                    # Initial loss only once at training start
+                    if epoch_idx == self.start_epoch and batch_idx == 0:
+                        self.logger.info(set_color(f"Initial batch loss: {batch_loss_val:.6f}", "blue"))
+                        self.tensorboard.add_scalar("Loss/Initial", batch_loss_val, epoch_idx)
+                        self.wandblogger.log_metrics(
+                            {"epoch": epoch_idx, "initial_loss": batch_loss_val, "train_step": epoch_idx},
+                            head="train",
+                        )
+            except Exception:
+                # Avoid interrupting training if logging fails
+                pass
+
             scaler.scale(loss + sync_loss).backward()
             if self.clip_grad_norm:
                 clip_grad_norm_(self.model.parameters(), **self.clip_grad_norm)
@@ -1945,6 +1968,10 @@ class HFPathLanguageModelingTrainer(ExplainableTrainer):
             output_dir=output_dir,
             eval_strategy="epoch",
             save_strategy="epoch",
+            # Log every training step so we can record per-batch loss
+            logging_strategy="steps",
+            logging_steps=1,
+            logging_first_step=True,
             eval_steps=self.eval_step,
             learning_rate=self.learning_rate,
             weight_decay=self.weight_decay,
