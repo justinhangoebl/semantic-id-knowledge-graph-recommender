@@ -158,10 +158,11 @@ class KGGLMDataset(KnowledgePathDataset):
         else:
             super().generate_user_path_dataset()
 
-    def generate_pretrain_dataset(self):
-        """Generate pretrain dataset for KGGLM model."""
+    """def generate_pretrain_dataset(self):
+        Generate pretrain dataset for KGGLM model
         import os, pickle
-        saved_paths_file = "paths_ml_1m.pickle"
+        saved_paths_file = "paths_ml-1m_small.pickle"
+        #saved_paths_file = "paths_lfm-1b.pickle"
         if os.path.exists(saved_paths_file):
             with open(saved_paths_file, "rb") as f:
                 self._path_dataset = pickle.load(f)
@@ -250,10 +251,13 @@ def _generate_paths_random_walks(start_node, **kwargs):
     
     return list(local_paths)  # Return as list for easier flattening
 
-"""     def generate_pretrain_dataset(self):
-        Generate pretrain dataset for KGGLM model.
+"""     
+    def generate_pretrain_dataset(self):
+        """Generate pretrain dataset for KGGLM model."""
         import os, pickle
-        saved_paths_file = "paths_5_5_500.pickle"
+        saved_paths_file = "paths_ml-1m_initial_2weeks.pickle"
+        #saved_paths_file = "paths_ml-1m_small.pickle"
+        #saved_paths_file = "paths_lfm-1b.pickle"
         if os.path.exists(saved_paths_file):
             with open(saved_paths_file, "rb") as f:
                 self._path_dataset = pickle.load(f)
@@ -335,7 +339,7 @@ def _generate_paths_random_walks(start_node, **kwargs):
                 local_paths.add(generated_path)
     
     # Add all local paths to global set at once (thread-safe with GIL)
-    paths.update(local_paths) """
+    paths.update(local_paths)
 
 
 class TPRecTimestampDataset:

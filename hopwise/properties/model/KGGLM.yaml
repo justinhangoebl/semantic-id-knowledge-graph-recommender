@@ -1,6 +1,6 @@
 # OVERAL.yaml
 # Environment Settings
-gpu_id: '2'                     # (str) The id of GPU device(s).
+gpu_id: '9'                     # (str) The id of GPU device(s).
 worker: 0                       # (int) The number of workers processing the data.
 use_gpu: True                   # (bool) Whether or not to use GPU.
 seed: 2024                      # (int) Random seed.
@@ -14,15 +14,11 @@ dataset_save_path: ~            # (str) The path of saved dataset.
 save_dataloaders: True         # (bool) Whether or not save split dataloaders.
 dataloaders_save_path: './dataloader/' # (str) The path of saved dataloaders.
 log_wandb: True                # (bool) Whether or not to use Weights & Biases(W&B).
-wandb_project: 'KGGLM - Pretrain'        # (str) The project to conduct experiments in W&B.
 progress_bar_rich: True         # (bool) Whether or not to use rich progress bar.
 shuffle: True                   # (bool) Whether or not to shuffle the training data before each epoch.
 weight_precision: float32
 
 # Training Settings
-epochs: 5                       # (int) The number of training epochs.
-train_batch_size: 256           # (int) The training batch size.
-learner: adamW                  # (str) The name of used optimizer.
 eval_step: 1                    # (int) The number of training epochs before an evaluation on the valid dataset.
 stopping_step: 10               # (int) The threshold for validation-based early stopping.
 clip_grad_norm: ~               # (dict) The args of clip_grad_norm_ which will clip gradient norm of model.
@@ -44,14 +40,12 @@ metrics: ["Recall","MRR","NDCG","Hit","Precision"]  # (list or str) Evaluation m
 topk: [10]                      # (list or int or None) The value of k for topk evaluation metrics.
 valid_metric: NDCG@10           # (str) The evaluation metric for early stopping.
 valid_metric_bigger: True       # (bool) Whether to take a bigger valid metric value as a better result.
-eval_batch_size: 64           # (int) The evaluation batch size.
-metric_decimal_place: 4         # (int) The decimal place of metric scores.
 
 # Sample.yaml
 numerical_features: []          # (list) Float feature fields to be embedded
 additional_feat_suffix: ~       # (list) Control loading additional atomic files.
-user_inter_num_interval: "[3,inf)"    # (str) User interval for filtering inter, such as [A,B] / [A,B) / (A,B) / (A,B].
-item_inter_num_interval: "[3,inf)"    # (str) Item interval for filtering inter, such as [A,B] / [A,B) / (A,B) / (A,B].
+user_inter_num_interval: "[2,inf)"    # (str) User interval for filtering inter, such as [A,B] / [A,B) / (A,B) / (A,B].     [5,inf)
+item_inter_num_interval: "[2,inf)"    # (str) Item interval for filtering inter, such as [A,B] / [A,B) / (A,B) / (A,B].     [5,inf)
 
 # knowledge_path_base.yaml
 train_neg_sample_args:
@@ -64,16 +58,6 @@ load_col:
 # Data preprocessing for knowledge graph triples
 entity_kg_num_interval: "[0,inf)"       # (str) Entity interval for filtering kg.
 relation_kg_num_interval: "[0,inf)"     # (str) Relation interval for filtering kg.
-
-path_generation_args:
-    paths_per_user: 10          # (int) Number of paths generated per user.
-    num_beams: 20               # (int) Number of beams for beam search.
-    num_beam_groups: 5          # (int) Number of groups for diverse beam search.
-    diversity_penalty: 0.3      # (float) Diversity penalty for beam search.
-    length_penalty: 0.0         # (float) Length penalty for beam search.
-    top_k: ~                    # (int) The number of highest probability vocabulary tokens to keep for top-k-filtering.
-    top_p: ~                    # (float) The cumulative probability for top-p-filtering.
-    do_sample: False            # (bool) Whether to use sampling ; use greedy decoding otherwise.
 
 # ml-1m.yaml8
 # Atomic File Format
@@ -105,8 +89,6 @@ ui_relation: "[UI-Relation]"    # (str) Name assigned to the interaction relatio
 kg_reverse_r: False             # (bool) Whether to reverse relations of triples for bidirectional edges.
 
 # Knowledge Path Sampling-based Model Needed
-path_hop_length: 3              # (int) Number of hops in the knowledge path.
-MAX_PATHS_PER_USER: 1000        # (int) Maximum number of kg sampled paths per user.
 context_length: ~               # (int) Maximum length of the context. Set to (path_hop_length * 2) + 1 (U) + 2 (BOS/EOS) by default.
 metapaths: ~                    # (list) Metapaths used to sample paths.
 tokenizer:                      # (dict) Tokenizer parameters.
@@ -138,24 +120,61 @@ normalize_field: ~              # (list) List of filed names to be normalized.
 normalize_all: True            # (bool) Whether or not to normalize all the float like fields.
 
 # KGGLM.yaml
-learning_rate: 2e-4
-weight_decay: 0.01
-warmup_steps: 250               # (int) Number of warmup steps for learning rate scheduler.
+gpu_id: '9'                                         # (str) The id of GPU device(s).
+
+wandb_project: 'KGGLM - pre - ml-1m 2 week run'     # (str) The project name in W&B.        ml-1m
+wandb_project: 'KGGLM - pre - ml-1m small official' # (str) The project name in W&B.            ml1m
+#wandb_project: 'KGGLM - pre - lfm-1b'               # (str) The project name in W&B.        lfm-1b
+
+#train_stage: 'pretrain'                            # (str) The training stage. Range in ['pretrain', 'finetune'].
+#pre_model_path: ''                                 # (str) The path of pretrained model.
+
+train_stage: 'finetune'                             # (str) The training stage. Range in ['pretrain', 'finetune'].
+pre_model_path: './saved/huggingface-distilgpt2-KGGLM-ml-1m-pretrained-5.pth/checkpoint-756430/'      # (str) The path of pretrained model. ml-1m
+pre_model_path: './saved/huggingface-distilgpt2-KGGLM-ml1m-pretrained-5.pth/checkpoint-134285/'      # (str) The path of pretrained model. ml1m
+#pre_model_path: './saved/huggingface-distilgpt2-KGGLM-lfm-1b-pretrained-5.pth/checkpoint-170555/'    # (str) The path of pretrained model. lfm-1b
+
+learning_rate: 2e-5             # (float) Learning rate for optimizer.                      ml-1m
+weight_decay: 0.01              # (float) Weight decay for optimizer.                       ml-1m
+warmup_steps: 500               # (int) Number of warmup steps for learning rate scheduler. ml-1m
+
+learning_rate: 3e-5             # (float) Learning rate for optimizer.                      ml1m
+weight_decay: 0.01              # (float) Weight decay for optimizer.                       ml1m
+warmup_steps: 250               # (int) Number of warmup steps for learning rate scheduler. ml1m
+
+#learning_rate: 1e-5             # (float) Learning rate for optimizer.                      lfm-1b
+#weight_decay: 0.01              # (float) Weight decay for optimizer.                       lfm-1b
+#warmup_steps: 250               # (int) Number of warmup steps for learning rate scheduler. lfm-1b
+
 embedding_size: 768             # (int) Size of the embeddings.
 num_heads: 12                   # (int) Number of heads in the multi-head attention.
 num_layers: 6                   # (int) Number of layers in the transformer.
 use_kg_token_types: True        # (bool) Whether to use token types for the knowledge graph.
 
+path_hop_length: 3              # (int) Number of hops in the knowledge path.
+MAX_PATHS_PER_USER: 500        # (int) Maximum number of kg sampled paths per user.
+
+pretrain_epochs: 3              # (int) Number of epochs for pre-training.
+epochs: 15                       # (int) The number of training epochs.
+
+train_batch_size: 256           # (int) The training batch size.
+eval_batch_size: 128           # (int) The evaluation batch size.
 save_step: 50                   # (int) Number of steps to save the model during pre-training.
-pretrain_epochs: 5              # (int) Number of epochs for pre-training.
-train_stage: 'pretrain'         # (str) The training stage. Range in ['pretrain', 'finetune'].
-pre_model_path: ''              # (str) The path of pretrained model.
-#train_stage: 'finetune'        # (str) The training stage. Range in ['pretrain', 'finetune'].
-#pre_model_path: './saved/huggingface-distilgpt2-KGGLM-ml-100k-pretrained-3.pth/checkpoint-1392/'              # (str) The path of pretrained model.
-#pre_model_path: './saved/huggingface-distilgpt2-KGGLM-ml-1m-pretrained-3.pth/checkpoint-497133/'              # (str) The path of pretrained model.
+metric_decimal_place: 4         # (int) The decimal place of metric scores.
+learner: adamW                  # (str) The name of used optimizer.
 
 base_model: distilgpt2
 sequence_postprocessor: BeamSearch
+
+path_generation_args:
+    paths_per_user: 10          # (int) Number of paths generated per user.
+    num_beams: 20               # (int) Number of beams for beam search.
+    num_beam_groups: 5          # (int) Number of groups for diverse beam search.
+    diversity_penalty: 0.3      # (float) Diversity penalty for beam search.
+    length_penalty: 0.0         # (float) Length penalty for beam search.
+    top_k: ~                    # (int) The number of highest probability vocabulary tokens to keep for top-k-filtering.
+    top_p: ~                    # (float) The cumulative probability for top-p-filtering.
+    do_sample: False            # (bool) Whether to use sampling ; use greedy decoding otherwise.
 
 path_sample_args:
     temporal_causality: False   # (bool) Whether to use temporal causality.
