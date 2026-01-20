@@ -126,12 +126,12 @@ wandb_project: 'KGGLM - pre - ml-1m 2 week run'     # (str) The project name in 
 wandb_project: 'KGGLM - pre - ml-1m small official' # (str) The project name in W&B.            ml1m
 #wandb_project: 'KGGLM - pre - lfm-1b'               # (str) The project name in W&B.        lfm-1b
 
-#train_stage: 'pretrain'                            # (str) The training stage. Range in ['pretrain', 'finetune'].
-#pre_model_path: ''                                 # (str) The path of pretrained model.
+train_stage: 'pretrain'                            # (str) The training stage. Range in ['pretrain', 'finetune'].
+pre_model_path: ''                                 # (str) The path of pretrained model.
 
-train_stage: 'finetune'                             # (str) The training stage. Range in ['pretrain', 'finetune'].
-pre_model_path: './saved/huggingface-distilgpt2-KGGLM-ml-1m-pretrained-5.pth/checkpoint-756430/'      # (str) The path of pretrained model. ml-1m
-pre_model_path: './saved/huggingface-distilgpt2-KGGLM-ml1m-pretrained-5.pth/checkpoint-134285/'      # (str) The path of pretrained model. ml1m
+#train_stage: 'finetune'                             # (str) The training stage. Range in ['pretrain', 'finetune'].
+#pre_model_path: './saved/huggingface-distilgpt2-KGGLM-ml-1m-pretrained-5.pth/checkpoint-756430/'      # (str) The path of pretrained model. ml-1m
+#pre_model_path: './saved/huggingface-distilgpt2-KGGLM-ml1m-pretrained-5.pth/checkpoint-134285/'      # (str) The path of pretrained model. ml1m
 #pre_model_path: './saved/huggingface-distilgpt2-KGGLM-lfm-1b-pretrained-5.pth/checkpoint-170555/'    # (str) The path of pretrained model. lfm-1b
 
 learning_rate: 2e-5             # (float) Learning rate for optimizer.                      ml-1m
