@@ -2212,3 +2212,10 @@ class KGGLMTrainer(HFPathLanguageModelingTrainer, PretrainTrainer):
             return super().fit(train_data, valid_data, verbose, saved, show_progress, callback_fn)
         else:
             raise ValueError(f"Please make sure that the 'train_stage' is in [{self.model.TRAIN_STAGES}]!")
+
+
+class KIGERTrainer(KGGLMTrainer):
+    r"""KIGERTrainer is designed for KIGER, which extends KGGLM by using semantic IDs for items.
+    It inherits all functionality from KGGLMTrainer including pretrain/finetune stages.
+    """
+    pass

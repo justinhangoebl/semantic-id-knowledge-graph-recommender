@@ -124,6 +124,7 @@ class FeatureSource(Enum):
     ITEM_ID = "item_id"
     KG = "kg"
     NET = "net"
+    SEMANTICS = "semanticids"
 
 
 class PathLanguageModelingTokenType(Enum):
@@ -134,6 +135,7 @@ class PathLanguageModelingTokenType(Enum):
     - ``RELATION``: Relation tokens.
     - ``USER``: User tokens.
     - ``ITEM``: Item tokens.
+    - ``SEMANTIC``: Semantic ID tokens (for KIGER model).
     """
 
     SPECIAL = ("S", 0)
@@ -141,6 +143,7 @@ class PathLanguageModelingTokenType(Enum):
     RELATION = ("R", 2)
     USER = ("U", 3)
     ITEM = ("I", 4)
+    SEMANTIC = ("SEM", 5)
 
     def __init__(self, token, token_id):
         self.token = token

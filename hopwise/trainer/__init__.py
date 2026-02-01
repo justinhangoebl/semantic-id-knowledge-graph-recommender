@@ -19,4 +19,5 @@ __all__ = [
     "PEARLMfromscratchTrainer",
     "HFPathLanguageModelingTrainer",
     "KGGLMTrainer",
+    "KIGERTrainer",
 ]

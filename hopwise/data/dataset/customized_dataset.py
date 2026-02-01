@@ -23,7 +23,13 @@ import pandas as pd
 import torch
 from sklearn.mixture import GaussianMixture as GMM
 
-from hopwise.data.dataset import KGSeqDataset, KnowledgeBasedDataset, KnowledgePathDataset, SequentialDataset
+from hopwise.data.dataset import (
+    KGSeqDataset,
+    KnowledgeBasedDataset,
+    KnowledgePathDataset,
+    KnowledgePathSemanticIDDataset,
+    SequentialDataset,
+)
 from hopwise.data.interaction import Interaction
 from hopwise.sampler import SeqSampler
 from hopwise.utils import FeatureType, progress_bar, set_color
@@ -211,6 +217,163 @@ class KGGLMDataset(KnowledgePathDataset):
             with open(saved_paths_file, "wb") as f:
                 pickle.dump(path_string, f)
 
+            self._path_dataset = path_string
+
+
+class KIGERDataset(KnowledgePathSemanticIDDataset):
+    """Dataset for KIGER model with semantic IDs and efficient pretrain path generation.
+    
+    This class extends KnowledgePathSemanticIDDataset to add KGGLM-style pretraining
+    path generation. It can reuse existing KGGLM pretrain paths or generate new ones
+    using the same efficient random walk algorithm.
+    """
+    
+    def _get_field_from_config(self):
+        super()._get_field_from_config()
+        self.train_stage = self.config["train_stage"]
+
+        path_sample_args = self.config["path_sample_args"]
+        self.pretrain_hop_length = path_sample_args["pretrain_hop_length"]
+        self.pretrain_hop_length = tuple(map(int, self.pretrain_hop_length[1:-1].split(",")))
+        self.pretrain_paths = path_sample_args["pretrain_paths"]
+
+    def generate_user_path_dataset(self):
+        """Generate path dataset based on training stage."""
+        if self.train_stage == "pretrain":
+            self.generate_pretrain_dataset()
+        else:
+            super().generate_user_path_dataset()
+
+    def generate_pretrain_dataset(self):
+        """Generate pretrain dataset for KIGER model.
+        
+        This method can reuse KGGLM pretrain paths by checking for existing
+        pickle files, or generate new paths using the same algorithm.
+        The paths will be formatted with semantic IDs via _format_path().
+        """
+        import os, pickle
+        
+        # Try to load existing KGGLM paths first (to reuse computation)
+        dataset_name = self.config["dataset"]
+        kgglm_paths_file = f"./paths/KGGLM - pre - ml-1m 2 week run_pretrain_paths_(5, 5).pickle"
+        kiger_paths_file = f"./paths/{self.config.wandb_project}_pretrain_paths_{self.pretrain_hop_length}.pickle"
+        
+        # Check if KIGER paths already exist
+        if os.path.exists(kiger_paths_file):
+            self.logger.info(f"Loading KIGER pretrain paths from {kiger_paths_file}")
+            with open(kiger_paths_file, "rb") as f:
+                self._path_dataset = pickle.load(f)
+            return
+        
+        # Check if we can reuse KGGLM paths (need to reformat with semantic IDs)
+        if os.path.exists(kgglm_paths_file):
+            self.logger.info(f"Found KGGLM paths at {kgglm_paths_file}, converting to semantic IDs...")
+            with open(kgglm_paths_file, "rb") as f:
+                kgglm_paths = pickle.load(f)
+            
+            # Parse KGGLM paths and reformat with semantic IDs
+            self.logger.info("Converting KGGLM paths to KIGER format with semantic IDs...")
+            
+            # Split paths by newline and process each path
+            path_lines = kgglm_paths.strip().split('\n')
+            kiger_paths = []
+            
+            for path_line in progress_bar(
+                path_lines,
+                desc=set_color("Converting KGGLM to KIGER paths", "green", progress=True),
+                ncols=100
+            ):
+                if not path_line.strip():
+                    continue
+                
+                # Parse tokens in the path (format: "E43999 R44 I1508 R23 E17629 ...")
+                tokens = path_line.strip().split()
+                new_tokens = []
+                
+                for token in tokens:
+                    if token.startswith('I'):
+                        # This is an item token - replace with semantic IDs
+                        item_idx = int(token[1:])  # Extract item index (e.g., "I1508" -> 1508)
+                        
+                        # Get semantic IDs for this item
+                        if item_idx in self.semantic_id_mapping:
+                            sem_ids = self.semantic_id_mapping[item_idx]
+                            # Add all semantic tokens for this item
+                            for sem_id in sem_ids:
+                                new_tokens.append(f"SEM{sem_id}")
+                        else:
+                            # Item not in semantic mapping - skip this path
+                            new_tokens = None
+                            break
+                    else:
+                        # Keep users (U), entities (E), and relations (R) as-is
+                        new_tokens.append(token)
+                
+                # Only add path if all items were successfully converted
+                if new_tokens:
+                    kiger_paths.append(' '.join(new_tokens))
+            
+            # Join all paths with newlines
+            path_string = '\n'.join(kiger_paths) + '\n'
+            
+            # Save KIGER-formatted paths
+            os.makedirs("./paths", exist_ok=True)
+            with open(kiger_paths_file, "wb") as f:
+                pickle.dump(path_string, f)
+            
+            self.logger.info(f"Converted {len(kiger_paths)} paths from KGGLM to KIGER format")
+            self.logger.info(f"Saved KIGER pretrain paths to {kiger_paths_file}")
+            self._path_dataset = path_string
+            return
+        
+        # Generate new paths
+        if self._path_dataset is None:
+            graph = self._create_ckg_igraph(show_relation=True, directed=False)
+            kg_rel_num = len(self.relations)
+            graph.es["weight"] = [0.0] * (self.inter_num) + [1.0] * kg_rel_num
+
+            graph_min_iid = 1 + self.user_num
+            min_hop, max_hop = self.pretrain_hop_length
+
+            paths = set()
+            iter_paths = progress_bar(
+                range(graph_min_iid + 1, len(graph.vs)),
+                ncols=100,
+                total=len(graph.vs) - graph_min_iid,
+                desc=set_color("KIGER Pre-training Path Sampling", "red", progress=True),
+            )
+            max_tries_per_entity = self.config["path_sample_args"]["MAX_RW_TRIES_PER_IID"]
+
+            kwargs = dict(
+                graph=graph,
+                min_hop=min_hop,
+                max_hop=max_hop,
+                pretrain_paths=self.pretrain_paths,
+                max_tries_per_entity=max_tries_per_entity,
+                paths=paths,
+            )
+
+            if not self.parallel_max_workers:
+                for entity in iter_paths:
+                    _generate_paths_random_walks(entity, **kwargs)
+            else:
+                list(joblib.Parallel(n_jobs=self.parallel_max_workers, prefer="threads")(
+                    joblib.delayed(_generate_paths_random_walks)(entity, **kwargs) for entity in iter_paths
+                ))
+
+            paths_with_relations = self._add_paths_relations(graph, paths)
+
+            # Format paths with semantic IDs (this is where items become SEM tokens)
+            path_string = ""
+            for path in paths_with_relations:
+                path_string += self._format_path(path) + "\n"
+            
+            # Save KIGER-formatted paths
+            os.makedirs("./paths", exist_ok=True)
+            with open(kiger_paths_file, "wb") as f:
+                pickle.dump(path_string, f)
+            
+            self.logger.info(f"Saved KIGER pretrain paths to {kiger_paths_file}")
             self._path_dataset = path_string
 
 
