@@ -76,13 +76,18 @@ class BaseSequencePostProcessor:
             not (
                 uid_token.startswith(PathLanguageModelingTokenType.USER.token)
                 and recommended_token.startswith(PathLanguageModelingTokenType.ITEM.token)
+                and recommended_token.startswith(PathLanguageModelingTokenType.SEMANTIC.token)
             )
             or recommended_token == self.tokenizer.pad_token
         ):
             return
 
         uid = int(uid_token[1:])
-        recommended_item = int(recommended_token[1:])
+        if recommended_token.startswith(PathLanguageModelingTokenType.ITEM.token):
+            recommended_item = int(recommended_token[1:])
+        else:
+            recommended_item = 1
+            ## Semantic SPlitting here Sem ID
 
         if torch.isfinite(scores[batch_uidx, recommended_item]) or recommended_item in self.used_ids[uid]:
             return
@@ -109,7 +114,7 @@ class SequencePostProcessorLP:
             if len(self.topk[head_eid, rel_rid]) >= self.K:
                 continue
             recommended_token = seq[-1]
-            recommended_item = int(recommended_token[1:])
+            recommended_item = int(recommended_token[1:]) # Sem ID missing
             if (
                 recommended_item in self.kg_positives[(head_eid, rel_rid)]
                 or recommended_item in self.topk[head_eid, rel_rid]
@@ -220,5 +225,96 @@ class BeamSearchSequenceScorePostProcessor(BaseSequencePostProcessor):
         sorted_sequences = sequences[sorted_indices]
         sorted_batch_user_index = batch_user_index[sorted_indices]
         sorted_sequences_scores = generation_outputs["sequences_scores"][sorted_indices]
+
+        return self.parse_sequences(sorted_batch_user_index, sorted_sequences, sorted_sequences_scores)
+
+class SemanticSequencePostProcessor(BaseSequencePostProcessor):
+    """Post-processor for KIGER that handles semantic ID sequences."""
+    
+    def __init__(self, tokenizer, used_ids, item_num, reverse_semantic_mapping, semantic_ids_per_item, topk=10):
+        super().__init__(tokenizer, used_ids, item_num, topk)
+        self.reverse_semantic_mapping = reverse_semantic_mapping
+        self.semantic_ids_per_item = semantic_ids_per_item
+    
+    def _parse_single_sequence(self, scores, batch_uidx, sequence):
+        """Parse sequence with semantic IDs instead of item tokens."""
+        seq = self.tokenizer.decode(sequence).split(" ")
+        
+        # First token after BOS should be user
+        if len(seq) < 2:
+            return None
+        uid_token = seq[1]
+        if not uid_token.startswith("U"):
+            return None
+        uid = int(uid_token[1:])
+        
+        # Find the last semantic ID sequence (the recommended item)
+        # Work backwards from end (before EOS)
+        semantic_tokens = []
+        for token in reversed(seq[:-1]):  # Exclude EOS
+            if token.startswith("SEM"):
+                semantic_tokens.insert(0, token)
+                if len(semantic_tokens) == self.semantic_ids_per_item:
+                    break
+            elif semantic_tokens:
+                # Hit a non-SEM token after starting to collect SEMs
+                break
+        
+        if len(semantic_tokens) != self.semantic_ids_per_item:
+            return None  # Incomplete semantic sequence
+        
+        # Convert to item ID
+        semantic_ids = tuple(int(t[3:]) for t in semantic_tokens)
+        if semantic_ids not in self.reverse_semantic_mapping:
+            return None  # Invalid semantic sequence (doesn't map to real item)
+        
+        recommended_item = self.reverse_semantic_mapping[semantic_ids]
+        
+        # Check if already scored or used
+        if torch.isfinite(scores[batch_uidx, recommended_item]):
+            return None
+        if recommended_item in self.used_ids[uid]:
+            return None
+        
+        return uid, recommended_item, seq
+
+    def get_sequences(self, generation_outputs, max_new_tokens=24):
+        """Extract and rank sequences for semantic-ID outputs.
+
+        This method is resilient to `generation_outputs` being either a mapping
+        (dict-like) or an object with attributes (the outputs returned by
+        HuggingFace generation). It ranks sequences by `sequences_scores` if
+        available, otherwise preserves generation order.
+        """
+        # helper to access mapping or attribute
+        def _get(name):
+            if isinstance(generation_outputs, dict):
+                return generation_outputs.get(name, None)
+            return getattr(generation_outputs, name, None)
+
+        sequences = _get("sequences")
+        if sequences is None:
+            raise ValueError("generation_outputs does not contain 'sequences'")
+
+        user_num = sequences[:, 1].unique().numel()
+
+        num_return_sequences = sequences.shape[0] // user_num
+        batch_user_index = torch.arange(user_num, device=sequences.device).repeat_interleave(
+            num_return_sequences
+        )
+
+        seq_scores = _get("sequences_scores")
+        if seq_scores is None:
+            # fallback: try scores tensor (list/tuple of logits) is not a direct
+            # per-sequence score; preserve original order if no per-sequence scores
+            sorted_indices = torch.arange(sequences.shape[0], device=sequences.device)
+            sorted_sequences = sequences[sorted_indices]
+            sorted_sequences_scores = torch.zeros(sequences.shape[0], device=sequences.device)
+            sorted_batch_user_index = batch_user_index[sorted_indices]
+        else:
+            sorted_indices = seq_scores.argsort(descending=True)
+            sorted_sequences = sequences[sorted_indices]
+            sorted_sequences_scores = seq_scores[sorted_indices]
+            sorted_batch_user_index = batch_user_index[sorted_indices]
 
         return self.parse_sequences(sorted_batch_user_index, sorted_sequences, sorted_sequences_scores)

@@ -123,7 +123,7 @@ normalize_all: True            # (bool) Whether or not to normalize all the floa
 gpu_id: '9'                                         # (str) The id of GPU device(s).
 
 wandb_project: 'KGGLM - pre - ml-1m 2 week run'     # (str) The project name in W&B.        ml-1m
-wandb_project: 'KGGLM - pre - ml-1m small official' # (str) The project name in W&B.            ml1m
+#wandb_project: 'KGGLM - pre - ml-1m small official' # (str) The project name in W&B.            ml1m
 #wandb_project: 'KGGLM - pre - lfm-1b'               # (str) The project name in W&B.        lfm-1b
 
 train_stage: 'pretrain'                            # (str) The training stage. Range in ['pretrain', 'finetune'].
@@ -151,7 +151,7 @@ num_heads: 12                   # (int) Number of heads in the multi-head attent
 num_layers: 6                   # (int) Number of layers in the transformer.
 use_kg_token_types: True        # (bool) Whether to use token types for the knowledge graph.
 
-path_hop_length: 10              # (int) Number of hops in the knowledge path.
+path_hop_length: 3              # (int) Number of hops in the knowledge path.
 MAX_PATHS_PER_USER: 500        # (int) Maximum number of kg sampled paths per user.
 
 pretrain_epochs: 3              # (int) Number of epochs for pre-training.

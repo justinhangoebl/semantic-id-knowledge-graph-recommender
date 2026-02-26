@@ -252,8 +252,19 @@ class KnowledgePathDataset(KnowledgeBasedDataset):
         if self._tokenized_dataset is None:
             tokenized_dataset = self.tokenize(self.path_dataset.split("\n"))
             tokenized_dataset = Interaction(tokenized_dataset.data)
+            # Exclude only real special tokens (BOS/EOS/PAD/MASK/etc.) from appearing in the middle of paths.
+            # Do not treat the unknown token as a "special" token for filtering here because unknown
+            # tokens may appear when running KIGER (semantic ID vocab mismatches) and should not
+            # cause all paths to be removed silently.
+            unk_id = None
+            try:
+                unk_id = self.tokenizer.unk_token_id
+            except Exception:
+                unk_id = None
+            special_ids = set(self.tokenizer.all_special_ids) - ({unk_id} if unk_id is not None else set())
+
             correct_path_mask = [
-                all(spec_token not in path[1:-1] for spec_token in self.tokenizer.all_special_ids)
+                all(spec_token not in path[1:-1] for spec_token in special_ids)
                 for path in tokenized_dataset["input_ids"]
             ]
             tokenized_dataset = tokenized_dataset[correct_path_mask]

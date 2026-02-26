@@ -119,22 +119,22 @@ preload_weight: ~               # (dict) Preloaded weight in {IDs (token): pretr
 normalize_field: ~              # (list) List of filed names to be normalized.
 normalize_all: True            # (bool) Whether or not to normalize all the float like fields.
 
-# KGGLM.yaml
-gpu_id: '9'                                         # (str) The id of GPU device(s).
+# KIGER.yaml
+gpu_id: '6'                                         # (str) The id of GPU device(s).
 
-wandb_project: 'KIGER - pre - ml-1m 2 week run'     # (str) The project name in W&B.        ml-1m
-#wandb_project: 'KGGLM - pre - ml-1m small official' # (str) The project name in W&B.            ml1m
-#wandb_project: 'KGGLM - pre - lfm-1b'               # (str) The project name in W&B.        lfm-1b
+wandb_project: 'KIGER - ml-1m'     # (str) The project name in W&B.        ml-1m
+#wandb_project: 'KIGER - pml1m' # (str) The project name in W&B.            ml1m
+#wandb_project: 'KIGER - pre - lfm-1b'               # (str) The project name in W&B.        lfm-1b
 
 train_stage: 'pretrain'                            # (str) The training stage. Range in ['pretrain', 'finetune'].
 pre_model_path: ''                                 # (str) The path of pretrained model.
 
 #train_stage: 'finetune'                             # (str) The training stage. Range in ['pretrain', 'finetune'].
-#pre_model_path: './saved/huggingface-distilgpt2-KGGLM-ml-1m-pretrained-5.pth/checkpoint-756430/'      # (str) The path of pretrained model. ml-1m
-#pre_model_path: './saved/huggingface-distilgpt2-KGGLM-ml1m-pretrained-5.pth/checkpoint-134285/'      # (str) The path of pretrained model. ml1m
-#pre_model_path: './saved/huggingface-distilgpt2-KGGLM-lfm-1b-pretrained-5.pth/checkpoint-170555/'    # (str) The path of pretrained model. lfm-1b
+#pre_model_path: ''      # (str) The path of pretrained model. ml-1m
+#pre_model_path: ''      # (str) The path of pretrained model. ml1m
+#pre_model_path: ''    # (str) The path of pretrained model. lfm-1b
 
-learning_rate: 2e-3             # (float) Learning rate for optimizer.                      ml-1m
+learning_rate: 2e-5             # (float) Learning rate for optimizer.                      ml-1m
 weight_decay: 0.01              # (float) Weight decay for optimizer.                       ml-1m
 warmup_steps: 500               # (int) Number of warmup steps for learning rate scheduler. ml-1m
 
@@ -196,6 +196,7 @@ path_sample_args:
 # Semantic ID Configuration (KIGER-specific)
 num_semantic_tokens: 256        # (int) Total number of unique semantic tokens (vocabulary size for semantic IDs).
 semantic_ids_per_item: 3        # (int) Number of semantic tokens representing each item.
+kgglm_paths_file: "./paths/KGGLM - pre - ml-1m 2 week run_pretrain_paths_(5, 5).pickle"  # (str) Path to KGGLM paths for potential reuse.
                                 # Note: The .semanticids file should match these settings.
 
 # Dataset Configuration Notes:

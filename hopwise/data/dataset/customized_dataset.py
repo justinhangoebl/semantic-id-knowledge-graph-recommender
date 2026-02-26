@@ -170,8 +170,22 @@ class KGGLMDataset(KnowledgePathDataset):
         saved_paths_file = f"./paths/{self.config.wandb_project}_pretrain_paths_{self.pretrain_hop_length}.pickle"
         if os.path.exists(saved_paths_file):
             with open(saved_paths_file, "rb") as f:
-                self._path_dataset = pickle.load(f)
-            return 
+                loaded = pickle.load(f)
+            # If the loaded paths contain SEM tokens (KIGER-format) but we're running KGGLM,
+            # skip reusing the file to avoid tokenizer/vocabulary mismatches that result
+            # in all sequences being filtered out as unknown tokens.
+            try:
+                text = loaded.decode("utf-8") if isinstance(loaded, (bytes, bytearray)) else str(loaded)
+            except Exception:
+                text = str(loaded)
+            model_name = self.config["model"] if "model" in self.config else ""
+            if "SEM" in text and str(model_name).upper() == "KGGLM":
+                self.logger.info(
+                    "Found pretrain paths file with SEM tokens but running KGGLM; regenerating paths."
+                )
+            else:
+                self._path_dataset = loaded
+                return
 
         if self._path_dataset is None:
             graph = self._create_ckg_igraph(show_relation=True, directed=False)
@@ -255,7 +269,7 @@ class KIGERDataset(KnowledgePathSemanticIDDataset):
         
         # Try to load existing KGGLM paths first (to reuse computation)
         dataset_name = self.config["dataset"]
-        kgglm_paths_file = f"./paths/KGGLM - pre - ml-1m 2 week run_pretrain_paths_(5, 5).pickle"
+        kgglm_paths_file = self.config["kgglm_paths_file"]
         kiger_paths_file = f"./paths/{self.config.wandb_project}_pretrain_paths_{self.pretrain_hop_length}.pickle"
         
         # Check if KIGER paths already exist

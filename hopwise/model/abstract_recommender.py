@@ -276,14 +276,18 @@ class PathLanguageModelingRecommender(KnowledgeRecommender):
         self.n_tokens = len(dataset.tokenizer)
         self.token_sequence_length = dataset.token_sequence_length - 1  # EOS token is not included
 
-        logits_processor = get_logits_processor(config["model"])(
-            tokenized_ckg=dataset.get_tokenized_ckg(),
-            tokenized_used_ids=dataset.get_tokenized_used_ids(),
-            max_sequence_length=self.token_sequence_length,
-            tokenizer=dataset.tokenizer,
-            task=KnowledgeEvaluationType.REC,
-        )
-        self.logits_processor_list = LogitsProcessorList([logits_processor])
+        # KIGER uses unconstrained generation - no logits processor
+        if config["model"] == "KIGER":
+            self.logits_processor_list = LogitsProcessorList([])
+        else:
+            logits_processor = get_logits_processor(config["model"])(
+                tokenized_ckg=dataset.get_tokenized_ckg(),
+                tokenized_used_ids=dataset.get_tokenized_used_ids(),
+                max_sequence_length=self.token_sequence_length,
+                tokenizer=dataset.tokenizer,
+                task=KnowledgeEvaluationType.REC,
+            )
+            self.logits_processor_list = LogitsProcessorList([logits_processor])
 
         self.sequence_postprocessor = get_sequence_postprocessor(config["sequence_postprocessor"])(
             dataset.tokenizer,
@@ -345,6 +349,7 @@ class ExplainablePathLanguageModelingRecommender(PathLanguageModelingRecommender
 
     def __init__(self, config, dataset, _skip_nn_module_init=True):
         super().__init__(config, dataset, _skip_nn_module_init=_skip_nn_module_init)
+        self.semantic_ids_per_item = config["semantic_ids_per_item"]
 
     def explain(self, inputs, **kwargs):
         kwargs["max_length"] = self.token_sequence_length
@@ -362,10 +367,12 @@ class ExplainablePathLanguageModelingRecommender(PathLanguageModelingRecommender
 
     def decode_path(self, path):
         """Standardize path format"""
+        self.logger.info(f"Decoding path: {path}")
         new_path = []
         # Process the path
         # [BOS] U R I R E/I R I
-        for node_idx in range(1, len(path) + 1, 2):
+        node_idx = 1
+        while node_idx < len(path):
             if path[node_idx].startswith(PathLanguageModelingTokenType.USER.token):
                 user_id = int(path[node_idx][1:])
                 if node_idx - 1 == 0:
@@ -378,12 +385,32 @@ class ExplainablePathLanguageModelingRecommender(PathLanguageModelingRecommender
                 relation = int(path[node_idx - 1][1:])
                 item_id = int(path[node_idx][1:])
                 new_node = (relation, "item", item_id)
-            else:
+                
+            elif path[node_idx].startswith(PathLanguageModelingTokenType.SEMANTIC.token):
+                relation = int(path[node_idx - 1][1:])
+                semantic_ids = []
+                for semantic_count in range(self.semantic_ids_per_item):
+                    semantic_ids.append( int(path[node_idx+semantic_count][3:]))
+                new_node = (relation, "semantic", semantic_ids)
+                
+                # skip nexty tokens for semantic ids
+                node_idx += self.semantic_ids_per_item - 1
+                
+            elif path[node_idx].startswith(PathLanguageModelingTokenType.ENTITY.token):
+
                 # Is an entity
                 relation = int(path[node_idx - 1][1:])
                 entity_id = int(path[node_idx][1:])
                 new_node = (relation, "entity", entity_id)
+
+            else: 
+                relation = path[node_idx - 1][1:]
+                token = path[node_idx][1:]
+
+                new_node = (relation, "UNK", token)
+
             new_path.append(new_node)
+            node_idx += 2
         return new_path
 
 

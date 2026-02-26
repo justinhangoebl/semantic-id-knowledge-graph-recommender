@@ -837,7 +837,7 @@ class Serendipity(AbstractMetric):
         item_matrix, item_count, history_matrix, num_users = self.used_info(dataobject)
         pop_recs = np.tile(item_count, (num_users, 1))
         pop_recs[tuple(history_matrix)] = 0
-        pop_recs = pop_recs[1:]  # remove the padding
+        pop_recs = pop_recs[1:]  # remove the padding # SEM ID missing
         pop_topk = np.argsort(pop_recs, axis=-1)[:, ::-1][:, : max(self.topk)]
         topk_intersection = np.zeros_like(item_matrix, dtype=bool)
         for u, (user_topk, user_pop_topk) in enumerate(zip(item_matrix, pop_topk)):

@@ -514,8 +514,18 @@ class Config:
                     metapaths[i] = list(map(tuple, metapaths[i]))
 
         if self.final_config_dict.get("context_length") is None:
-            # 2 * path_hop_length + 1(U) + BOS + EOS
-            self.final_config_dict["context_length"] = (self.final_config_dict["path_hop_length"] * 2) + 3
+            # For KIGER with semantic IDs: items expand to multiple tokens
+            # Worst case: all entities in path are items → path_hop_length × semantic_ids_per_item
+            if self.final_config_dict.get("model") == "KIGER":
+                semantic_ids_per_item = self.final_config_dict.get("semantic_ids_per_item", 3)
+                path_hop_length = self.final_config_dict["path_hop_length"]
+                # 1(U) + path_hop_length(relations) + path_hop_length*semantic_ids_per_item(entities) + BOS + EOS
+                self.final_config_dict["context_length"] = (
+                    1 + path_hop_length + (path_hop_length * semantic_ids_per_item) + 2
+                )
+            else:
+                # 2 * path_hop_length + 1(U) + BOS + EOS
+                self.final_config_dict["context_length"] = (self.final_config_dict["path_hop_length"] * 2) + 3
 
         default_path_sample_args = {
             "temporal_causality": False,

@@ -53,8 +53,8 @@ class PEARLM(ExplainablePathLanguageModelingRecommender, GPT2LMHeadModel):
         GPT2LMHeadModel.__init__(self, transformers_config)
         self.to(config["device"])
 
-        # Add type ids template
-        if self.use_kg_token_types:
+        # Skip token type IDs for KIGER - the alternating pattern doesn't work with semantic IDs
+        if self.use_kg_token_types and config["model"] != "KIGER":
             prev_vocab_size = self.n_tokens
             spec_type, spec_type_id = PathLanguageModelingTokenType.SPECIAL.value
             ent_type, ent_type_id = PathLanguageModelingTokenType.ENTITY.value
@@ -63,7 +63,8 @@ class PEARLM(ExplainablePathLanguageModelingRecommender, GPT2LMHeadModel):
             token_types = [f"<Token-Type.{token_type}>" for token_type in [spec_type, ent_type, rel_type]]
             for token_type in token_types:
                 dataset.tokenizer.add_tokens(token_type)
-            self.n_tokens = len(dataset.tokenizer)  # Update the vocabulary size after adding new tokens
+            self.n_tokens = len(dataset.tokenizer)
+            self._tokenizer = dataset.tokenizer
 
             spec_type_id, ent_type_id, rel_type_id = (
                 spec_type_id + prev_vocab_size,
@@ -71,12 +72,21 @@ class PEARLM(ExplainablePathLanguageModelingRecommender, GPT2LMHeadModel):
                 rel_type_id + prev_vocab_size,
             )
             self.token_type_ids = torch.LongTensor(
-                # BOS + ENT + REL + ENT + REL + ... + ENT + REL + EOS
                 [spec_type_id, ent_type_id] + [rel_type_id, ent_type_id] * dataset.path_hop_length + [spec_type_id]
             )
             self.token_type_ids = self.token_type_ids.to(config["device"])
 
             self.transformer.resize_token_embeddings(self.n_tokens)
+        else:
+            self.use_kg_token_types = False  # Disable for KIGER
+
+        # Ensure tokenizer is always available on the model for decoding/prediction
+        # (KIGER disables token-type additions above, but still needs the dataset tokenizer).
+        try:
+            self._tokenizer = dataset.tokenizer
+        except Exception:
+            self._tokenizer = None
+            self.logger.info("Tokenizer not found in dataset; decoding will be unavailable.")
 
         self.loss = nn.CrossEntropyLoss()
         self.post_init()
@@ -149,9 +159,36 @@ class PEARLM(ExplainablePathLanguageModelingRecommender, GPT2LMHeadModel):
         )
 
     def predict(self, input_ids, **kwargs):
-        return self.forward(input_ids, **kwargs)
+        self.logger.info("PREDICTION: ")
+        self.logger.info("\tINPUT_IDS: " + str(input_ids))
+        
+        forward_res = self.forward(input_ids, **kwargs)
+        
+        # Extract logits whether forward returns a tuple or a dataclass
+        logits = forward_res.logits if hasattr(forward_res, "logits") else forward_res[0]
+        
+        # Get the most likely token at each position
+        predicted_ids = logits.argmax(dim=-1)
+        
+        transformed_res = self._tokenizer.batch_decode(predicted_ids, skip_special_tokens=True)
+        self.logger.info(transformed_res)
+        
+        return forward_res
 
     def generate(self, inputs, **kwargs):
+        self.logger.info("GENERATION: ")
+        
         kwargs["logits_processor"] = self.logits_processor_list
         kwargs["num_return_sequences"] = kwargs.pop("paths_per_user")
-        return super(GPT2LMHeadModel, self).generate(**inputs, **kwargs)
+        
+        generate_res = super(GPT2LMHeadModel, self).generate(**inputs, **kwargs)
+        
+        # Extract sequences from the output object
+        sequences = generate_res.sequences if hasattr(generate_res, 'sequences') else generate_res[0]
+        
+        self.logger.info(sequences)
+        
+        transformed_res = self._tokenizer.batch_decode(sequences, skip_special_tokens=True)
+        self.logger.info(transformed_res)
+        
+        return generate_res

@@ -16,6 +16,8 @@ The key difference from KGGLM:
 """
 
 from hopwise.model.path_language_modeling_recommender.kgglm import KGGLM
+from hopwise.model.sequence_postprocessor import SemanticSequencePostProcessor
+
 
 
 class KIGER(KGGLM):
@@ -58,4 +60,12 @@ class KIGER(KGGLM):
             f"KIGER initialized with {self.num_semantic_tokens} semantic tokens, "
             f"{self.semantic_ids_per_item} tokens per item"
         )
-    
+        self.sequence_postprocessor = SemanticSequencePostProcessor(
+            tokenizer=dataset.tokenizer,
+            used_ids=dataset.get_user_used_ids(),
+            item_num=dataset.item_num,
+            reverse_semantic_mapping=dataset.get_reverse_semantic_mapping(),
+            semantic_ids_per_item=self.semantic_ids_per_item,
+            topk=config["topk"],
+        )
+        

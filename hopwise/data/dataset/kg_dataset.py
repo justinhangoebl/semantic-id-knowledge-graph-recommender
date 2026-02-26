@@ -309,8 +309,10 @@ class KnowledgeBasedDataset(Dataset):
             split_ids = self._calcu_split_ids(tot=len(data), ratios=ratios)
             next_index = [range(start, end) for start, end in zip([0] + split_ids, split_ids + [len(data)])]
 
-        else:
-            grouped_data_feat_index = self._grouped_index(data[group_by].numpy())
+        else:            
+            # data[group_by] may be pandas Series, numpy array, or torch Tensor
+            # use numpy.asarray for broad compatibility
+            grouped_data_feat_index = self._grouped_index(np.asarray(data[group_by]))
             next_index = [[] for _ in range(len(ratios))]
             for grouped_index in grouped_data_feat_index:
                 tot_cnt = len(grouped_index)

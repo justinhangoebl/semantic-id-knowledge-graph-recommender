@@ -46,12 +46,12 @@ class KnowledgePathSemanticIDDataset(KnowledgePathDataset):
         # Load semantic ID mapping before initializing tokenizer
         self._load_semantic_id_mapping(config)
         
-        # Initialize parent class (this will call _init_tokenizer)
+        # Initialize parent class (this will call _get_field_from_config and _init_tokenizer)
         super().__init__(config)
         
         self.logger.info(
             set_color("Semantic ID Dataset", "blue") +
-            f": {len(self.semantic_id_mapping)} items mapped to semantic IDs"
+            f": {len(self.semantic_id_mapping) if self.semantic_id_mapping is not None else 0} items mapped to semantic IDs"
         )
     
     def _load_semantic_id_mapping(self, config):
@@ -341,3 +341,23 @@ class KnowledgePathSemanticIDDataset(KnowledgePathDataset):
             tokenized_kg[tail_token][relation_token].add(head_token)
 
         return tokenized_kg
+
+    def _get_field_from_config(self):
+        super()._get_field_from_config()
+        
+        # Override token_sequence_length for semantic IDs
+        # Worst case: all h entities in path are items → h × semantic_ids_per_item
+        max_entity_tokens = self.path_hop_length * self.semantic_ids_per_item
+        self.token_sequence_length = (
+            1 +                          # User
+            self.path_hop_length +       # Relations  
+            max_entity_tokens +          # Entities/Items (worst case: all items)
+            2                            # BOS/EOS
+        )
+    
+    def get_reverse_semantic_mapping(self):
+        """Return mapping: tuple(semantic_ids) → item_id for recommendation extraction."""
+        return {
+            tuple(sem_ids): item_id 
+            for item_id, sem_ids in self.semantic_id_mapping.items()
+        }

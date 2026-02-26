@@ -240,6 +240,7 @@ def data_preparation(config, dataset):
             - valid_data (AbstractDataLoader): The dataloader for validation.
             - test_data (AbstractDataLoader): The dataloader for testing.
     """  # noqa: E501
+    logger = getLogger()
     dataloaders = load_split_dataloaders(config)
     if dataloaders is not None:
         train_data, valid_data, test_data = dataloaders
@@ -249,6 +250,8 @@ def data_preparation(config, dataset):
         model_input_type = config["MODEL_INPUT_TYPE"]
         # model = config["model"]
         built_datasets = dataset.build()
+        logger.info("Modeltype: " + str(model_type))
+        logger.info("Modelinputtype: " + str(model_input_type))
 
         if model_type in [ModelType.KNOWLEDGE] and model_input_type not in [InputType.USERWISE]:
             if isinstance(built_datasets, dict):
@@ -317,6 +320,9 @@ def data_preparation(config, dataset):
         else:
             train_dataset, valid_dataset, test_dataset = built_datasets
             train_sampler, valid_sampler, test_sampler = create_samplers(config, dataset, built_datasets)
+            
+            logger.info("Train Dataset: " + str(train_dataset))
+            logger.info("Train Sampler: " + str(train_sampler))
 
             train_data = get_dataloader(config, "train")(
                 config, train_dataset, train_sampler, shuffle=config["shuffle"]
@@ -327,7 +333,6 @@ def data_preparation(config, dataset):
             if config["save_dataloaders"]:
                 save_split_dataloaders(config, dataloaders=(train_data, valid_data, test_data))
 
-    logger = getLogger()
     logger.info(
         set_color("[Training]: ", "magenta")
         + set_color("train_batch_size", "cyan")
