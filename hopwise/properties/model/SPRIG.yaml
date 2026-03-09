@@ -89,7 +89,7 @@ ui_relation: "[UI-Relation]"    # (str) Name assigned to the interaction relatio
 kg_reverse_r: False             # (bool) Whether to reverse relations of triples for bidirectional edges.
 
 # Knowledge Path Sampling-based Model Needed
-context_length: ~               # (int) Maximum length of the context. Set to (path_hop_length * 2) + 1 (U) + 2 (BOS/EOS) by default.
+context_length: 27               # (int) Maximum length of the context. Set to (path_hop_length * 2) + 1 (U) + 2 (BOS/EOS) by default.
 metapaths: ~                    # (list) Metapaths used to sample paths.
 tokenizer:                      # (dict) Tokenizer parameters.
     model: WordLevel            # (str) Tokenizer model.
