@@ -165,6 +165,8 @@ commands = [
   ["uv", "run", "--active", "hopwise", "train", "--model", "LightGCN", "--epochs=2"],
   ["uv", "run", "--active", "hopwise", "train", "--model", "KGAT", "--epochs=2"]
 ]
+[tool.pyright]
+reportPrivateImportUsage = "none"
 
 [tool.uv]
 find-links = [

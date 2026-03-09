@@ -7,7 +7,7 @@ import os
 import warnings
 
 # Path to the saved dataloader
-dataloader_path = "/home/justin-hangoebl/master-thesis/unica/hopwise/saved/KGGLM - ml-100k - dataloaders/ml-100k-for-KGGLM-pretrain"
+dataloader_path = "/home/justin-hangoebl/master-thesis/unica/hopwise/saved/KGGLM - ml-1m - dataloaders/ml-1m-for-KGGLM-pretrain"
 
 print(f"Loading dataloader from: {dataloader_path}")
 print(f"File exists: {os.path.exists(dataloader_path)}")
@@ -187,3 +187,5 @@ if os.path.exists(dataloader_path):
 
 else:
     print("Dataloader file not found!")
+
+

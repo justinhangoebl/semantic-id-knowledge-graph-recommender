@@ -1,0 +1,89 @@
+data_path: './dataset/'           # (str) The path of input dataset.
+checkpoint_dir: 'saved'         # (str) The path to save checkpoint file.
+show_progress: True             # (bool) Whether or not to show the progress bar of every epoch.
+save_dataset: False             # (bool) Whether or not to save filtered dataset.
+dataset_save_path: 'saved/ml-1m-small-dataset'            # (str) The path of saved dataset.
+save_dataloaders: False         # (bool) Whether or not save split dataloaders.
+dataloaders_save_path: './dataloader/' # (str) The path of saved dataloaders.
+log_wandb: True                # (bool) Whether or not to use Weights & Biases(W&B).
+wandb_project: 'SPRIG - debug'     # (str) The project name in W&B.        ml-1m
+progress_bar_rich: True         # (bool) Whether or not to use rich progress bar.
+
+# Sample.yaml
+user_inter_num_interval: "[0,inf)"    # (str) User interval for filtering inter, such as [A,B] / [A,B) / (A,B) / (A,B].     [5,inf)
+item_inter_num_interval: "[0,inf)"    # (str) Item interval for filtering inter, such as [A,B] / [A,B) / (A,B) / (A,B].     [5,inf)
+
+
+# Data preprocessing for knowledge graph triples
+entity_kg_num_interval: "[0,inf)"       # (str) Entity interval for filtering kg.
+relation_kg_num_interval: "[0,inf)"     # (str) Relation interval for filtering kg.
+
+# KGGLM.yaml
+gpu_id: '6'                                         # (str) The id of GPU device(s).
+
+train_stage: 'pretrain'                            # (str) The training stage. Range in ['pretrain', 'finetune'].
+pre_model_path: ''                                 # (str) The path of pretrained model.
+
+#train_stage: 'finetune'                             # (str) The training stage. Range in ['pretrain', 'finetune'].
+#pre_model_path: './saved/huggingface-distilgpt2-KIGER-ml-1m-pretrained-3.pth/checkpoint-452430/'      # (str) The path of pretrained model. ml-1m
+
+learning_rate: 2e-5             # (float) Learning rate for optimizer.                      ml-1m
+weight_decay: 0.01              # (float) Weight decay for optimizer.                       ml-1m
+warmup_steps: 500               # (int) Number of warmup steps for learning rate scheduler. ml-1m
+path_hop_length: 3              # (int) Number of hops in the knowledge path.
+MAX_PATHS_PER_USER: 50        # (int) Maximum number of kg sampled paths per user.
+pretrain_epochs: 1              # (int) Number of epochs for pre-training.
+epochs: 1                       # (int) The number of training epochs.
+train_batch_size: 1           # (int) The training batch size.
+eval_batch_size: 1           # (int) The evaluation batch size.
+train_neg_sample_args:
+    sample_num: "none"
+
+eval_args:
+  split: {'RS':[0.4,0.3,0.3]}
+  group_by: user
+  order: RO
+  mode: full
+
+path_generation_args:
+    paths_per_user: 10          # (int) Number of paths generated per user.
+
+path_sample_args:
+    pretrain_paths: 10          # (int) Number of paths per entity for pre-training. Paper uses 500.
+    MAX_RW_TRIES_PER_IID: 1      # (int) Maximum number of tries per entity. Paper likely uses 1 (no retry for speed).
+
+
+
+## addtional fix
+# ─── Data filtering ───────────────────────────────────────────────────────────
+user_inter_num_interval: "[0,inf)"
+item_inter_num_interval: "[0,inf)"
+entity_kg_num_interval: "[0,inf)"
+relation_kg_num_interval: "[0,inf)"
+filter_inter_by_user_or_item: False   # ← ADD THIS — stops iterative filtering
+
+# ─── Split: give the majority to train ────────────────────────────────────────
+eval_args:
+  split: {'RS':[0.8,0.1,0.1]}         # ← was [0.4,0.3,0.3], too little for train
+  group_by: user
+  order: RO
+  mode: full
+
+# ─── Path sampling: be generous for tiny debug dataset ────────────────────────
+MAX_PATHS_PER_USER: 50
+path_sample_args:
+    pretrain_paths: 10
+    MAX_RW_TRIES_PER_IID: 3            # ← was 1, give the RW more attempts
+    MAX_RW_PATHS_PER_HOP: 5
+    MAX_CONSECUTIVE_INVALID: 10
+    pretrain_hop_length: (3, 5)  # (tuple) The range of the hop length for pre-training. Paper uses 5 hops.
+    temporal_causality: False
+    collaborative_path: True
+    strategy: constrained-rw
+    path_token_separator: " "
+    restrict_by_phase: False           # ← False for pretrain (no phase item restriction)
+    parallel_max_workers: 4            # ← keep low for debug
+
+semantic_ids_per_item: 3
+semantic_vocab_size: 256
+use_kg_token_types: False
