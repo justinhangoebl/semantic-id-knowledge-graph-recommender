@@ -141,6 +141,7 @@ class PathLanguageModelingTokenType(Enum):
     RELATION = ("R", 2)
     USER = ("U", 3)
     ITEM = ("I", 4)
+    SEMANTIC = ("SEM", 5)
 
     def __init__(self, token, token_id):
         self.token = token
