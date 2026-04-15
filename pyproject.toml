@@ -25,12 +25,6 @@ description = """
 _hopwise_ is an advanced extension of the Recbole library, designed to enhance recommendation systems with the power of knowledge graphs.
 By integrating knowledge embedding models, path-based reasoning methods, and path language modeling apporaches, hopwise supports both recommendation and link prediction tasks with a focus on interpretability and self-explanation.
 """
-authors = [
-    { name = "Giacomo Medda", email = "jackm.medda@gmail.com" },
-    { name = "Ludovico Boratto", email = "ludovico.boratto@acm.org" },
-    { name = "Mirko Marras", email = "mirko.marras@acm.org" },
-    { name = "Alessandro Soccol", email = "alessandrosoccol@gmail.com" },
-]
 readme = "README.md"
 requires-python = ">=3.9,<3.13"
 license = { file = "LICENSE" }
