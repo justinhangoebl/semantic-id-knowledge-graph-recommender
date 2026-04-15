@@ -75,13 +75,8 @@ def get_model(model_name):
         Recommender: model class
     """
     model_submodule = [
-        "general_recommender",
-        "context_aware_recommender",
         "sequential_recommender",
-        "knowledge_aware_recommender",
-        "knowledge_graph_embedding_recommender",
         "path_language_modeling_recommender",
-        "exlib_recommender",
     ]
 
     model_file_name = model_name.lower()

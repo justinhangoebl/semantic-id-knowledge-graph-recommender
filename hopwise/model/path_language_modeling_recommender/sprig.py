@@ -9,7 +9,7 @@ from hopwise.utils import PathLanguageModelingTokenType
 class SPRIG(PEARLM):
     """SPRIG uses Semantic IDs: items are represented as N-token sequences (SEM{k} tokens)
     derived from hierarchical quantization, enabling cross-item generalization through
-    shared code prefixes. This is the unconstrained ablation — no grammar masking.
+    shared code prefixes. This is the unconstrained ablation - no grammar masking.
     """
 
     TRAIN_STAGES = ["pretrain", "finetune"]
@@ -33,7 +33,7 @@ class SPRIG(PEARLM):
         # Store semantic vocab for postprocessing
         self.semantic_vocab = dataset.semantic_vocab
 
-        # Disable all logits processors — SPRIG is the unconstrained ablation
+        # Disable all logits processors
         self.logits_processor_list = []
 
         # Replace the default postprocessor with SPRIG's SEM-block scanner.
@@ -75,7 +75,7 @@ class SPRIG(PEARLM):
             # different sequence lengths (by design: each stage computes its own
             # token_sequence_length formula, so n_positions can legitimately differ).
             # We keep the first min(pretrain, finetune) position embeddings from the
-            # pretrained checkpoint — exactly those that will be used during finetune —
+            # pretrained checkpoint - exactly those that will be used during finetune -
             # and discard the rest.  This is intentional, not a workaround.
             wpe_key = "transformer.wpe.weight"
             if wpe_key in weights:
@@ -116,7 +116,7 @@ class SPRIG(PEARLM):
                         weights[wte_key] = new_wte
                         self.logger.info(
                             f"WTE vocab mismatch: pretrain {pretrained_wte.shape[0]} vs "
-                            f"finetune {current_wte.shape[0]} — copying {min_vocab} rows, "
+                            f"finetune {current_wte.shape[0]} - copying {min_vocab} rows, "
                             f"reinitialising {current_wte.shape[0] - min_vocab} new token rows."
                         )
                     else:
@@ -176,7 +176,7 @@ class SPRIG(PEARLM):
                 i += 1
 
             if len(sem_block) == self.sequence_postprocessor.N:
-                # Reverse-map SEM token strings → token IDs → item ID
+                # Reverse-map SEM token strings ->  token IDs -> item ID
                 tok_ids = tuple(
                     self.sequence_postprocessor.tokenizer.convert_tokens_to_ids(t)
                     for t in sem_block
@@ -228,7 +228,7 @@ class SPRIG(PEARLM):
                     i += 1
 
                 if len(sem_block) == self.sequence_postprocessor.N:
-                    # Reverse-map SEM token strings → token IDs → item ID
+                    # Reverse-map SEM token strings -> token IDs -> item ID
                     tok_ids = tuple(
                         self.sequence_postprocessor.tokenizer.convert_tokens_to_ids(t)
                         for t in sem_block
@@ -239,10 +239,8 @@ class SPRIG(PEARLM):
                     else:
                         new_path.append((relation, "item", -1))
                 else:
-                    # Incomplete SEM block
                     new_path.append((relation, "item", -1))
             else:
-                # Unknown token type — skip
                 i += 1
 
         return new_path

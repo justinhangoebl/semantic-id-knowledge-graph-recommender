@@ -1,10 +1,3 @@
-"""
-SPRIG Dataset — semantic-ID-based knowledge path dataset.
-
-Items are represented as N consecutive SEM tokens instead of a single I token.
-No fallbacks: if semantic IDs are not present or malformed, the dataset raises.
-"""
-
 import os
 import pickle
 
@@ -28,8 +21,8 @@ class SPRIGDataset(KnowledgePathDataset):
     Required config keys (on top of parent requirements)
     -------------------------------------------------------
     train_stage           : "pretrain" | "finetune"
-    semantic_ids_per_item : int  — N, number of SEM codes per item
-    semantic_ids_file     : str  — path to the .semanticids CSV
+    semantic_ids_per_item : int  N, number of SEM codes per item
+    semantic_ids_file     : str  path to the .semanticids CSV
     path_sample_args.pretrain_hop_length : "(min, max)"
     path_sample_args.pretrain_paths      : int
     """
@@ -43,21 +36,17 @@ class SPRIGDataset(KnowledgePathDataset):
     context_length: int
     tokenizer_model: str
 
-    # ------------------------------------------------------------------
-    # Initialisation
-    # ------------------------------------------------------------------
-
     def __init__(self, config):
         # _get_field_from_config() is called by the grandparent before this
         # body runs, so _raw_semantic_mapping is already populated.
-        super().__init__(config)  # also calls _init_tokenizer → builds semantic_vocab
+        super().__init__(config) 
 
         # Hard check: I-tokens must not exist in the SPRIG tokenizer.
         unk_id = self._tokenizer.unk_token_id
         item_tok = PathLanguageModelingTokenType.ITEM.token + "0"
         assert self._tokenizer.convert_tokens_to_ids(item_tok) == unk_id, (
             "SPRIG tokenizer must contain no ITEM tokens. "
-            f"Found '{item_tok}' mapped to a real id — check _init_tokenizer."
+            f"Found '{item_tok}' mapped to a real id - check _init_tokenizer."
         )
 
         self.logger.info(
@@ -68,15 +57,11 @@ class SPRIGDataset(KnowledgePathDataset):
             self.semantic_vocab.num_semantic_tokens_per_item(),
             len(self._raw_semantic_mapping),
         )
-
-    # ------------------------------------------------------------------
-    # Config loading (runs before __init__ body via grandparent)
-    # ------------------------------------------------------------------
-
+        
     def _get_field_from_config(self):
         super()._get_field_from_config()
 
-        # --- Required SPRIG keys — KeyError if absent, intentional. ---
+        # Required SPRIG keys - KeyError if absent, intentional.
         self.train_stage = self.config["train_stage"]
         self.semantic_ids_per_item = int(self.config["semantic_ids_per_item"])
         
@@ -87,16 +72,10 @@ class SPRIGDataset(KnowledgePathDataset):
         self.pretrain_hop_length: tuple[int, int] = tuple(pretrain_hop)  # type: ignore
         self.pretrain_paths = int(path_args["pretrain_paths"])
 
-
-        # Each stage uses its own exact sequence length so padding and n_positions
-        # are never over-allocated.  A mismatch between pretrain and finetune
-        # n_positions is resolved by the WPE adaptation in sprig.py (intentional).
-        # [BOS] U/every [R every] * hop + [EOS]
+        # Each stage uses its own exact sequence length so padding and n_positions are never over-allocated. 
         if self.train_stage == "finetune":
             self.token_sequence_length = 2 + 1 + self.path_hop_length * (self.semantic_ids_per_item + 1)
         else:
-            # Pretrain paths include two additional boundary terms compared to
-            # the previous closed-form approximation.
             self.token_sequence_length = (
                 2
                 + self.semantic_ids_per_item
@@ -120,16 +99,8 @@ class SPRIGDataset(KnowledgePathDataset):
         sem_file = os.path.join(self.dataset_path, self.config["dataset"] + ".semanticids")
         self._raw_semantic_mapping = self._load_semantic_id_mapping(sem_file)
 
-
-    # ------------------------------------------------------------------
-    # Semantic ID file loading
-    # ------------------------------------------------------------------
-
     def _load_semantic_id_mapping(self, filepath: str) -> dict[int, list[int]]:
-        """Load ``filepath`` → ``{item_id: [code_0, …, code_{N-1}]}``.
-
-        Raises on every error condition — no silent fallbacks.
-        """
+        """Load ``filepath`` ... ``{item_id: [code_0, …, code_{N-1}]}``."""
         if not os.path.isfile(filepath):
             raise FileNotFoundError(
                 f"Semantic IDs file not found: {filepath}\n"
@@ -164,10 +135,6 @@ class SPRIGDataset(KnowledgePathDataset):
         if len(duplicate) > 0:
             raise ValueError(duplicate, len(duplicate))
         return mapping
-
-    # ------------------------------------------------------------------
-    # Tokenizer (replaces parent's I-token version)
-    # ------------------------------------------------------------------
 
     def _init_tokenizer(self):
         from tokenizers import Tokenizer, pre_tokenizers
@@ -237,19 +204,11 @@ class SPRIGDataset(KnowledgePathDataset):
             self.semantic_ids_per_item,
         )
 
-    # ------------------------------------------------------------------
-    # Path formatting — items → N SEM tokens
-    # ------------------------------------------------------------------
     def _format_path(self, path: np.ndarray) -> str | None:
-        """Convert a raw relation-interleaved path array to a token string.
-
-        Item nodes are expanded to N space-separated SEM tokens.
-        Returns ``None`` if any item in the path lacks a semantic mapping —
-        the caller must skip such paths.
-        """
+        """Convert a raw relation-interleaved path array to a token string. """
         path = path[path != self.PATH_PADDING]
-        path_nodes = path[::2]       # positions 0, 2, 4 … → node vertex IDs
-        path_relations = path[1::2]  # positions 1, 3, 5 … → relation IDs
+        path_nodes = path[::2]       # positions 0, 2, 4 …  node vertex IDs
+        path_relations = path[1::2]  # positions 1, 3, 5 …  relation IDs
 
         graph_min_iid = self.user_num
         graph_max_iid = self.user_num + self.item_num - 1
@@ -268,10 +227,10 @@ class SPRIGDataset(KnowledgePathDataset):
                     [PathLanguageModelingTokenType.USER.token + str(n)]
                 )
             elif n <= graph_max_iid:
-                # Item vertex — expand to N SEM tokens.
+                # Item vertex - expand to N SEM tokens.
                 item_id = n - self.user_num
                 if item_id not in self._raw_semantic_mapping:
-                    return None  # path contains unmapped item — drop it
+                    return None  # path contains unmapped item - drop it
                 codes = self._raw_semantic_mapping[item_id]
                 node_token_lists.append(
                     [PathLanguageModelingTokenType.SEMANTIC.token + str(c) for c in codes]
@@ -295,10 +254,6 @@ class SPRIGDataset(KnowledgePathDataset):
             out.extend(node_toks)
 
         return self.path_token_separator.join(out)
-
-    # ------------------------------------------------------------------
-    # Path dataset generation
-    # ------------------------------------------------------------------
 
     def generate_user_path_dataset(self):
         """Entry point for both pretrain and finetune path generation."""
@@ -343,9 +298,6 @@ class SPRIGDataset(KnowledgePathDataset):
             with open(cache_file, "rb") as fh:
                 cached_paths = pickle.load(fh)
 
-            # Backward compatibility:
-            # - new cache: list[str] of already-formatted paths
-            # - old cache: ndarray/list of raw relation-interleaved arrays
             if isinstance(cached_paths, (list, tuple)) and (
                 len(cached_paths) == 0 or isinstance(cached_paths[0], str)
             ):
@@ -459,7 +411,7 @@ class SPRIGDataset(KnowledgePathDataset):
         kg_rel_num = len(self.relations)
         graph.es["weight"] = [0.0] * self.inter_num + [1.0] * kg_rel_num
 
-        # Strip zero-weight interaction edges for sampling — they are never
+        # Strip zero-weight interaction edges for sampling - they are never
         # traversed but inflate average vertex degree ~10x, making every
         # random_walk step scan far more neighbors than needed.
         # The full graph is kept for _add_paths_relations_variable lookups.
@@ -510,7 +462,7 @@ class SPRIGDataset(KnowledgePathDataset):
         Returns a 2-D numpy array of shape (n_paths, 2*max_hop+1) with
         ``PATH_PADDING`` filling unused positions.
         """
-        # Build a sparse edge → relation lookup from the igraph edge list.
+        # Build a sparse edge -> relation lookup from the igraph edge list.
         # Keys are (source_vid, target_vid) tuples; values are relation token IDs.
         rel_field = self.field2token_id[self.relation_field]
         edge_rel: dict[tuple[int, int], int] = {}
@@ -540,12 +492,8 @@ class SPRIGDataset(KnowledgePathDataset):
 
         return result
 
-    # ------------------------------------------------------------------
-    # CKG and used-ID helpers (required by the framework)
-    # ------------------------------------------------------------------
-
     def get_tokenized_ckg(self) -> dict:
-        """Return the CKG as ``head_tok → rel_tok → set(tail_tok_tuple)``.
+        """Return the CKG as ``head_tok -> rel_tok -> set(tail_tok_tuple)``.
 
         Item tails are N-tuples of SEM token IDs.
         Non-item nodes (users, entities) are 1-tuples for type consistency.
@@ -594,7 +542,7 @@ class SPRIGDataset(KnowledgePathDataset):
         return tokenized_kg
 
     def get_tokenized_used_ids(self) -> dict[int, set[tuple[int, ...]]]:
-        """Return ``user_token_id → set of SEM-tuple item representations``."""
+        """Return ``user_token_id -> set of SEM-tuple item representations``."""
         used_ids = self.get_user_used_ids()
         vocab = self._tokenizer.get_vocab()
 

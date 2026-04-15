@@ -130,7 +130,6 @@ class SPRIGSequencePostProcessor(BaseSequencePostProcessor):
                     # Advance past the consumed block.
                     i = j
                 else:
-                    # Incomplete block — skip past whatever SEM tokens we found.
                     i = j
             else:
                 i += 1

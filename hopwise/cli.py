@@ -391,10 +391,6 @@ def tune(
 def models(verbose, model_types):
     """List available models."""
     model_types_map = {
-        "Context": "context_aware_recommender",
-        "Exlib": "exlib_recommender",
-        "General": "general_recommender",
-        "KG-aware": "knowledge_aware_recommender",
         "KG-embed": "knowledge_graph_embedding_recommender",
         "PathLM": "path_language_modeling_recommender",
         "Sequential": "sequential_recommender",
