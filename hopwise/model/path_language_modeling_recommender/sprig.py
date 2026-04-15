@@ -1,26 +1,13 @@
-
-
-r"""SPRIG
-##################################################
-
-SPRIG is a path-language-modeling recommender. It learns the sequence of entity-relation triplets
-as paths extracted from a knowledge graph. It is trained to predict the next token in a sequence of tokens
-representing a path. The model extends PEARLM by adding a self-supervised pre-training phase on a large corpus of paths extracted from the knowledge graph, which allows the model to learn better representations of entities and relations. The model can be used for explainable recommendation by generating paths that explain the recommendations made by the model.
-
-"""
-
 import os
-
+from torch import nn
 from transformers.trainer_utils import get_last_checkpoint
 
 from hopwise.model.path_language_modeling_recommender.pearlm import PEARLM
+from hopwise.model.sprig_postprocessor import SPRIGSequencePostProcessor
+from hopwise.utils import PathLanguageModelingTokenType
 
 class SPRIG(PEARLM):
-    """SPRIG is a path-language-modeling recommender. It learns the sequence of entity-relation triplets
-    as paths extracted from a knowledge graph. It is trained to predict the next token in a sequence of tokens
-    representing a path. The model extends PEARLM by adding a self-supervised pre-training phase on a large corpus of paths extracted from the knowledge graph, which allows the model to learn better representations of entities and relations. The model can be used for explainable recommendation by generating paths that explain the recommendations made by the model.
-
-    SPRIG uses Semantic IDs: items are represented as N-token sequences (SEM{k} tokens)
+    """SPRIG uses Semantic IDs: items are represented as N-token sequences (SEM{k} tokens)
     derived from hierarchical quantization, enabling cross-item generalization through
     shared code prefixes. This is the unconstrained ablation — no grammar masking.
     """
@@ -35,12 +22,12 @@ class SPRIG(PEARLM):
                 "Use SPRIGDataset with a valid .semanticids file."
             )
 
-        # Override context_length to match SPRIG's variable-length sequences.
-        # PEARLM reads config["context_length"] for n_positions and n_ctx,
-        # but SPRIG sequences are longer due to multi-token items (N SEM tokens
-        # per item vs 1 I token). The dataset computes the correct length.
         config["context_length"] = dataset.token_sequence_length
 
+        # SPRIG has a different token-type layout than PEARLM/KGGLM: it uses SEMANTIC tokens instead of ITEM tokens, requiring 4 type embeddings
+        self.use_kg_token_types = config["use_kg_token_types"]
+        if self.use_kg_token_types:
+            raise ValueError("use_kg_token_types=True is not compatible with SPRIG's SEMANTIC token design. Set use_kg_token_types=False.")
         super().__init__(config, dataset)
 
         # Store semantic vocab for postprocessing
@@ -49,8 +36,22 @@ class SPRIG(PEARLM):
         # Disable all logits processors — SPRIG is the unconstrained ablation
         self.logits_processor_list = []
 
+        # Replace the default postprocessor with SPRIG's SEM-block scanner.
+        self.sequence_postprocessor = SPRIGSequencePostProcessor(
+            tokenizer=dataset.tokenizer,
+            used_ids=dataset.get_user_used_ids(),
+            item_num=dataset.item_num,
+            semantic_vocab=self.semantic_vocab,
+            semantic_ids_per_item=dataset.semantic_ids_per_item,
+            topk=config["topk"],
+        )
+
         self.train_stage = config["train_stage"]
         self.pre_model_path = config["pre_model_path"]
+
+        self.loss = nn.CrossEntropyLoss()
+        self.post_init()
+
 
         assert self.train_stage in self.TRAIN_STAGES
         if self.train_stage == "finetune":
@@ -70,10 +71,12 @@ class SPRIG(PEARLM):
             self.logger.info(f"Load pretrained model from {self.pre_model_path}")
             weights = load_file(os.path.join(self.pre_model_path, "model.safetensors"))
 
-            # Adapt positional embeddings (wpe) if context_length changed between
-            # pretraining and finetuning. When the number of positions differs,
-            # we either slice the pretrained matrix or fall back to the newly
-            # initialized one so that load_state_dict does not raise a size error.
+            # Adapt positional embeddings (wpe) when pretrain and finetune use
+            # different sequence lengths (by design: each stage computes its own
+            # token_sequence_length formula, so n_positions can legitimately differ).
+            # We keep the first min(pretrain, finetune) position embeddings from the
+            # pretrained checkpoint — exactly those that will be used during finetune —
+            # and discard the rest.  This is intentional, not a workaround.
             wpe_key = "transformer.wpe.weight"
             if wpe_key in weights:
                 try:
@@ -95,4 +98,151 @@ class SPRIG(PEARLM):
                         # Embedding dimension changed; skip loading wpe.
                         weights.pop(wpe_key)
 
+            # Adapt word token embeddings (wte) when pretrain and finetune have different vocab sizes. 
+            wte_key = "transformer.wte.weight"
+            if wte_key in weights:
+                try:
+                    current_wte = self.transformer.wte.weight
+                except AttributeError:
+                    current_wte = None
+
+                pretrained_wte = weights[wte_key]
+                if current_wte is not None and pretrained_wte.shape != current_wte.shape:
+                    if pretrained_wte.shape[1] == current_wte.shape[1]:
+                        # Same embedding dim, different vocab size.
+                        min_vocab = min(pretrained_wte.shape[0], current_wte.shape[0])
+                        new_wte = current_wte.clone()
+                        new_wte[:min_vocab] = pretrained_wte[:min_vocab].to(current_wte.dtype)
+                        weights[wte_key] = new_wte
+                        self.logger.info(
+                            f"WTE vocab mismatch: pretrain {pretrained_wte.shape[0]} vs "
+                            f"finetune {current_wte.shape[0]} — copying {min_vocab} rows, "
+                            f"reinitialising {current_wte.shape[0] - min_vocab} new token rows."
+                        )
+                    else:
+                        # Embedding dimension changed; skip loading wte.
+                        weights.pop(wte_key)
+
             self.load_state_dict(weights, strict=False)
+
+    def explain(self, inputs, **kwargs):
+        """Generate sequences and keep raw SEM tokens for semantic evaluation."""
+        kwargs["max_length"] = self.token_sequence_length
+        kwargs["min_length"] = self.token_sequence_length
+        outputs = self.generate(inputs, **kwargs)
+
+        max_new_tokens = self.token_sequence_length - inputs["input_ids"].size(1)
+        scores, sequences = self.sequence_postprocessor.get_sequences(outputs, max_new_tokens=max_new_tokens)
+        return scores, sequences
+
+    def decode_path(self, path):
+        """Standardize path format for SPRIG's variable-length SEM-token sequences.
+
+        Unlike the base class which assumes fixed alternating node/relation
+        positions and single-character prefixes, this handles multi-token SEM
+        items and the ``SEM`` prefix (3 chars).
+        """
+        sem_prefix = PathLanguageModelingTokenType.SEMANTIC.token
+        user_prefix = PathLanguageModelingTokenType.USER.token
+        relation_prefix = PathLanguageModelingTokenType.RELATION.token
+        entity_prefix = PathLanguageModelingTokenType.ENTITY.token
+
+        # Check BOS
+        if path[0] != "[BOS]":
+            raise ValueError("Path is not starting with a BOS Token")
+
+        new_path = []
+        i = 1  # skip [BOS] at index 0
+
+        # In finetune, the first token after [BOS] is always the user token.
+        if i < len(path) and path[i].startswith(user_prefix):
+            user_id = int(path[i][len(user_prefix):])
+            new_path.append(("self_loop", "user", user_id))
+            i += 1
+        elif self.train_stage == "finetune":
+            raise ValueError("FINETUNE: paths must start with an user token")
+        elif path[i].startswith(entity_prefix):
+            entity_id = int(path[i][len(entity_prefix)])
+            new_path.append(("self_loop", "user", entity_id))
+            i += 1
+        elif path[i].startswith(sem_prefix):
+            sem_block = []
+            while (
+                i < len(path)
+                and path[i].startswith(sem_prefix)
+                and len(sem_block) < self.sequence_postprocessor.N
+            ):
+                sem_block.append(path[i])
+                i += 1
+
+            if len(sem_block) == self.sequence_postprocessor.N:
+                # Reverse-map SEM token strings → token IDs → item ID
+                tok_ids = tuple(
+                    self.sequence_postprocessor.tokenizer.convert_tokens_to_ids(t)
+                    for t in sem_block
+                )
+                item_id = self.semantic_vocab.reverse_map(tok_ids)
+                if item_id is not None:
+                    new_path.append(("self_loop", "item", item_id))
+                else:
+                    new_path.append(("self_loop", "item", -1))
+            else:
+                # Incomplete SEM block
+                new_path.append(("self_loop", "item", -1))
+
+        # Remaining tokens: R <node_tokens> R <node_tokens> ...
+        while i < len(path):
+            tok = path[i]
+
+            # Skip [EOS] / [PAD] / other specials
+            if tok.startswith("["):
+                break
+
+            # Expect a relation token
+            if not tok.startswith(relation_prefix):
+                break
+            relation = int(tok[len(relation_prefix):])
+            i += 1
+
+            if i >= len(path) or path[i].startswith("["):
+                break
+
+            # Collect the node: either a single U/E token or N consecutive SEM tokens.
+            if path[i].startswith(user_prefix):
+                uid = int(path[i][len(user_prefix):])
+                new_path.append((relation, "user", uid))
+                i += 1
+            elif path[i].startswith(entity_prefix):
+                eid = int(path[i][len(entity_prefix):])
+                new_path.append((relation, "entity", eid))
+                i += 1
+            elif path[i].startswith(sem_prefix):
+                # Collect up to N SEM tokens
+                sem_block = []
+                while (
+                    i < len(path)
+                    and path[i].startswith(sem_prefix)
+                    and len(sem_block) < self.sequence_postprocessor.N
+                ):
+                    sem_block.append(path[i])
+                    i += 1
+
+                if len(sem_block) == self.sequence_postprocessor.N:
+                    # Reverse-map SEM token strings → token IDs → item ID
+                    tok_ids = tuple(
+                        self.sequence_postprocessor.tokenizer.convert_tokens_to_ids(t)
+                        for t in sem_block
+                    )
+                    item_id = self.semantic_vocab.reverse_map(tok_ids)
+                    if item_id is not None:
+                        new_path.append((relation, "item", item_id))
+                    else:
+                        new_path.append((relation, "item", -1))
+                else:
+                    # Incomplete SEM block
+                    new_path.append((relation, "item", -1))
+            else:
+                # Unknown token type — skip
+                i += 1
+
+        return new_path

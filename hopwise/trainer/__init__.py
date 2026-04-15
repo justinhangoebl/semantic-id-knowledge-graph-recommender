@@ -1,5 +1,6 @@
 from hopwise.trainer.hyper_tuning import *
 from hopwise.trainer.trainer import *
+from hopwise.trainer.sprig_trainer import *
 
 __all__ = [
     "Trainer",
@@ -19,4 +20,5 @@ __all__ = [
     "PEARLMfromscratchTrainer",
     "HFPathLanguageModelingTrainer",
     "KGGLMTrainer",
+    "SPRIGTrainer",
 ]

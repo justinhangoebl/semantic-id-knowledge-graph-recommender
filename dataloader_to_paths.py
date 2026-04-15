@@ -3,7 +3,7 @@ import warnings
 import os
 
 # Path to your saved dataloader
-dataloader_path = "/home/justin-hangoebl/master-thesis/unica/hopwise/saved/KGGLM - ml-1m - dataloaders/ml-1m-for-KGGLM-pretrain"
+dataloader_path = "/home/justin-hangoebl/master-thesis/unica/hopwise/saved/KGGLM - ml1m - dataloaders/ml1m-for-KGGLM-pretrain"
 
 # Output pickle path
 output_pickle = "ml1m_all_paths.pkl"

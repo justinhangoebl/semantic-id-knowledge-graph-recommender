@@ -8,8 +8,10 @@ No fallbacks: if semantic IDs are not present or malformed, the dataset raises.
 import os
 import pickle
 
+import joblib
 import numpy as np
 
+from hopwise.data import Interaction
 from hopwise.data.dataset import KnowledgePathDataset
 from hopwise.data.dataset.kgglm_dataset import _generate_paths_random_walks
 from hopwise.data.semantic_vocab import SemanticVocab
@@ -63,7 +65,7 @@ class SPRIGDataset(KnowledgePathDataset):
             "%d items with semantic IDs.",
             self.train_stage,
             self.semantic_ids_per_item,
-            self.semantic_vocab.num_semantic_tokens(),
+            self.semantic_vocab.num_semantic_tokens_per_item(),
             len(self._raw_semantic_mapping),
         )
 
@@ -86,20 +88,32 @@ class SPRIGDataset(KnowledgePathDataset):
         self.pretrain_paths = int(path_args["pretrain_paths"])
 
 
+        # Each stage uses its own exact sequence length so padding and n_positions
+        # are never over-allocated.  A mismatch between pretrain and finetune
+        # n_positions is resolved by the WPE adaptation in sprig.py (intentional).
+        # [BOS] U/every [R every] * hop + [EOS]
         if self.train_stage == "finetune":
-            self.token_sequence_length = 3 + self.path_hop_length * (self.semantic_ids_per_item + 1)
+            self.token_sequence_length = 2 + 1 + self.path_hop_length * (self.semantic_ids_per_item + 1)
         else:
-            self.token_sequence_length = 2 + self.pretrain_hop_length[1] * (self.semantic_ids_per_item + 2)
+            # Pretrain paths include two additional boundary terms compared to
+            # the previous closed-form approximation.
+            self.token_sequence_length = (
+                2
+                + self.semantic_ids_per_item
+                + self.pretrain_hop_length[1] * (self.semantic_ids_per_item + 1)
+                + 2
+            )
 
-        if self.token_sequence_length > self.context_length:
-            self.logger.warning(
-                "SPRIG: computed token_sequence_length (%d) > config context_length (%d). "
-                "Overriding. Set context_length >= %d to suppress this warning.",
-                self.token_sequence_length,
+        # SPRIG uses an exact stage-specific sequence length.
+        # Keep tokenizer padding/truncation length aligned with model n_positions
+        # to avoid positional embedding overflows.
+        if self.context_length != self.token_sequence_length:
+            self.logger.info(
+                "SPRIG: overriding context_length from %d to exact token_sequence_length %d.",
                 self.context_length,
                 self.token_sequence_length,
             )
-            self.context_length = self.token_sequence_length
+        self.context_length = self.token_sequence_length
 
     def _load_data(self, token, dataset_path):
         super()._load_data(token, dataset_path)
@@ -140,14 +154,15 @@ class SPRIGDataset(KnowledgePathDataset):
 
         # No two items may share the same code tuple (would break reverse map).
         seen: dict[tuple, int] = {}
+        duplicate = []
         for iid, codes in mapping.items():
             key = tuple(codes)
             if key in seen:
-                raise ValueError(
-                    f"Semantic ID collision: items {seen[key]} and {iid} share codes {key}. "
-                    "Re-generate your .semanticids file."
-                )
+                duplicate.append((seen[key], iid))
             seen[key] = iid
+        
+        if len(duplicate) > 0:
+            raise ValueError(duplicate, len(duplicate))
         return mapping
 
     # ------------------------------------------------------------------
@@ -225,7 +240,6 @@ class SPRIGDataset(KnowledgePathDataset):
     # ------------------------------------------------------------------
     # Path formatting — items → N SEM tokens
     # ------------------------------------------------------------------
-
     def _format_path(self, path: np.ndarray) -> str | None:
         """Convert a raw relation-interleaved path array to a token string.
 
@@ -243,7 +257,11 @@ class SPRIGDataset(KnowledgePathDataset):
         # Build per-node token lists.
         node_token_lists: list[list[str]] = []
         for node in path_nodes:
-            n = int(node)
+            if isinstance(node, str):
+                prefix_length = PathLanguageModelingTokenType.get_prefix_length(node)
+                n = int(node[prefix_length:])
+            else:
+                n = int(node)
             if n < graph_min_iid:
                 # User vertex
                 node_token_lists.append(
@@ -313,25 +331,36 @@ class SPRIGDataset(KnowledgePathDataset):
         if self._path_dataset is not None:
             return
 
-        wandb_proj = getattr(self.config, "wandb_proj", "SPRIG_default")
+        wandb_proj = getattr(self.config, "wandb_project", "SPRIG_default")
         cache_file = (
             f"./paths/{wandb_proj}_sprig_pretrain_raw_{self.pretrain_hop_length}.pkl"
         )
 
-        if os.path.exists(cache_file):
+        if os.path.exists(cache_file) and self.config["use_cached_pretrain_paths"]:
             self.logger.info(
-                "Loading cached SPRIG pretrain raw paths from %s …", cache_file
+                "Loading cached SPRIG pretrain formatted paths from %s …", cache_file
             )
             with open(cache_file, "rb") as fh:
-                raw_paths = pickle.load(fh)  # list of numpy path arrays
-        else:
-            raw_paths = self._sample_pretrain_paths()
-            os.makedirs(os.path.dirname(os.path.abspath(cache_file)), exist_ok=True)
-            with open(cache_file, "wb") as fh:
-                pickle.dump(raw_paths, fh)
-            self.logger.info(
-                "Cached %d pretrain raw paths to %s.", len(raw_paths), cache_file
+                cached_paths = pickle.load(fh)
+
+            # Backward compatibility:
+            # - new cache: list[str] of already-formatted paths
+            # - old cache: ndarray/list of raw relation-interleaved arrays
+            if isinstance(cached_paths, (list, tuple)) and (
+                len(cached_paths) == 0 or isinstance(cached_paths[0], str)
+            ):
+                self._path_dataset = "\n".join(cached_paths)
+                return
+
+            self.logger.warning(
+                "SPRIG cache contains legacy raw path format. Re-formatting and updating cache: %s",
+                cache_file,
             )
+            raw_paths = cached_paths
+        else:
+            # Sample new paths from KG and format them.
+            self.logger.info(cache_file)
+            raw_paths = self._sample_pretrain_paths()  # returns numpy array of path arrays
 
         lines: list[str] = []
         skipped = 0
@@ -345,34 +374,126 @@ class SPRIGDataset(KnowledgePathDataset):
         self.logger.info(
             "SPRIG pretrain: %d paths formatted, %d skipped.", len(lines), skipped
         )
+
+        # Cache the formatted strings for next time
+        os.makedirs(os.path.dirname(os.path.abspath(cache_file)), exist_ok=True)
+        with open(cache_file, "wb") as fh:
+            pickle.dump(lines, fh)
+        self.logger.info(
+            "Cached %d pretrain formatted paths to %s.", len(lines), cache_file
+        )
+
         self._path_dataset = "\n".join(lines)
+
+    def tokenize_path_dataset(self):
+        """Tokenize pre-generated paths and keep only structurally valid rows.
+
+        Unlike the parent implementation, PAD tokens are allowed because pretrain
+        paths can be shorter than `context_length` and are padded by the tokenizer.
+        """
+        if self._tokenized_dataset is not None:
+            return
+
+        if self._tokenizer is None:
+            raise ValueError("Tokenizer has not been initialized.")
+
+        tokenized_dataset = self.tokenize(self.path_dataset.split("\n"))
+        tokenized_dataset = Interaction(tokenized_dataset.data)
+
+        def _token_id(tok: str) -> int:
+            tok_id = self._tokenizer.convert_tokens_to_ids(tok)
+            if not isinstance(tok_id, int):
+                raise ValueError(f"Unexpected token id type for token '{tok}': {type(tok_id)}")
+            return tok_id
+
+        unk_id = _token_id(self.unk_token)
+        pad_id = _token_id(self.pad_token)
+        bos_id = _token_id(self.bos_token)
+        eos_id = _token_id(self.eos_token)
+
+        allowed_inside = {pad_id}
+        disallowed_inside = set(self._tokenizer.all_special_ids) - allowed_inside
+
+        valid_mask = []
+        for path_ids in tokenized_dataset["input_ids"]:
+            ids = path_ids.tolist()
+
+            # Must start/end with BOS/EOS and contain no UNK.
+            if (
+                not ids
+                or ids[0] != bos_id
+                or eos_id not in ids
+                or unk_id in ids
+            ):
+                valid_mask.append(False)
+                continue
+
+            # Ignore tail padding after EOS when checking internal special tokens.
+            eos_pos = len(ids) - 1 - ids[::-1].index(eos_id)
+            inside = ids[1:eos_pos]
+            valid = all(tok not in disallowed_inside for tok in inside)
+            valid_mask.append(valid)
+
+        kept = int(sum(valid_mask))
+        total = len(tokenized_dataset)
+        if kept == 0 and total > 0:
+            self.logger.warning(
+                "SPRIG tokenization filter removed all paths (%d/%d). "
+                "Falling back to unfiltered tokenized dataset to avoid empty training set.",
+                total,
+                total,
+            )
+            self._tokenized_dataset = tokenized_dataset
+        else:
+            self._tokenized_dataset = tokenized_dataset[valid_mask]
+
+        self.logger.info(
+            "SPRIG tokenization: kept %d/%d paths after validation.",
+            len(self._tokenized_dataset),
+            total,
+        )
 
     def _sample_pretrain_paths(self) -> np.ndarray:
         """Run random walks on the KG and return relation-interleaved path arrays."""
         graph = self._create_ckg_igraph(show_relation=True, directed=False)
         kg_rel_num = len(self.relations)
-        # Weight 0 on user-item edges keeps walks in the KG sub-graph.
         graph.es["weight"] = [0.0] * self.inter_num + [1.0] * kg_rel_num
 
+        # Strip zero-weight interaction edges for sampling — they are never
+        # traversed but inflate average vertex degree ~10x, making every
+        # random_walk step scan far more neighbors than needed.
+        # The full graph is kept for _add_paths_relations_variable lookups.
+        kg_only_graph = graph.copy()
+        kg_only_graph.delete_edges(kg_only_graph.es.select(weight_eq=0))
+
         min_hop, max_hop = self.pretrain_hop_length
-        graph_min_iid = self.user_num + 1  # skip user vertices
+        graph_min_iid = self.user_num
 
         paths: set[tuple] = set()
         max_tries = self.config["path_sample_args"]["MAX_RW_TRIES_PER_IID"]
-
-        for entity in progress_bar(
-            range(graph_min_iid, len(graph.vs)),
+        iter_entities = progress_bar(
+            range(graph_min_iid, len(kg_only_graph.vs)),
             desc=set_color("SPRIG Pretrain Sampling", "red", progress=True),
             ncols=100,
-        ):
-            _generate_paths_random_walks(
-                entity,
-                graph=graph,
-                min_hop=min_hop,
-                max_hop=max_hop,
-                pretrain_paths=self.pretrain_paths,
-                max_tries_per_entity=max_tries,
-                paths=paths,
+        )
+
+        kwargs = dict(
+            graph=kg_only_graph,
+            min_hop=min_hop,
+            max_hop=max_hop,
+            pretrain_paths=self.pretrain_paths,
+            max_tries_per_entity=max_tries,
+            paths=paths,
+        )
+
+        if not self.parallel_max_workers:
+            for entity in iter_entities:
+                _generate_paths_random_walks(entity, **kwargs)
+        else:
+            list(
+                joblib.Parallel(n_jobs=self.parallel_max_workers, prefer="threads")(
+                    joblib.delayed(_generate_paths_random_walks)(entity, **kwargs) for entity in iter_entities
+                )
             )
 
         return self._add_paths_relations_variable(graph, paths, max_hop)
@@ -435,26 +556,40 @@ class SPRIGDataset(KnowledgePathDataset):
 
         graph_min_iid = self.user_num
         graph_max_iid = self.user_num + self.item_num - 1
+        semantic_items = self.semantic_vocab.all_item_ids()
 
-        def vertex_to_tok_tuple(v: int) -> tuple[int, ...]:
+        def vertex_to_tok_tuple(v: int) -> tuple[int, ...] | None:
             if v < graph_min_iid:
                 return (vocab[PathLanguageModelingTokenType.USER.token + str(v)],)
             elif v <= graph_max_iid:
                 item_id = v - self.user_num
+                if item_id not in semantic_items:
+                    return None
                 return tuple(self.semantic_vocab.get_item_tokens(item_id))
             else:
                 return (vocab[PathLanguageModelingTokenType.ENTITY.token + str(v - self.user_num)],)
 
         tokenized_kg: dict = {}
+        skipped_edges = 0
         for e in graph.es:
             head_tup = vertex_to_tok_tuple(e.source)
             tail_tup = vertex_to_tok_tuple(e.target)
+            if head_tup is None or tail_tup is None:
+                skipped_edges += 1
+                continue
+
             rel_id = rel_field[e["type"]]
             rel_tok = vocab[PathLanguageModelingTokenType.RELATION.token + str(rel_id)]
 
             # Add both directions (graph is undirected).
             for h, t in ((head_tup, tail_tup), (tail_tup, head_tup)):
                 tokenized_kg.setdefault(h, {}).setdefault(rel_tok, set()).add(t)
+
+        if skipped_edges > 0:
+            self.logger.warning(
+                "SPRIG tokenized CKG: skipped %d edges due to missing semantic mapping.",
+                skipped_edges,
+            )
 
         return tokenized_kg
 
@@ -467,10 +602,22 @@ class SPRIGDataset(KnowledgePathDataset):
         items_iter = (
             used_ids.items() if isinstance(used_ids, dict) else enumerate(used_ids)
         )
+        skipped_items = 0
         for uid, items in items_iter:
             u_tok = vocab[PathLanguageModelingTokenType.USER.token + str(uid)]
-            result[u_tok] = {
-                tuple(self.semantic_vocab.get_item_tokens(int(iid)))
-                for iid in items
-            }
+            user_items: set[tuple[int, ...]] = set()
+            for iid in items:
+                item_id = int(iid)
+                if item_id not in self.semantic_vocab:
+                    skipped_items += 1
+                    continue
+                user_items.add(tuple(self.semantic_vocab.get_item_tokens(item_id)))
+            result[u_tok] = user_items
+
+        if skipped_items > 0:
+            self.logger.warning(
+                "SPRIG tokenized used IDs: skipped %d items due to missing semantic mapping.",
+                skipped_items,
+            )
+
         return result

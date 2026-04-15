@@ -110,6 +110,11 @@ deploy/
 # Act GitHub Actions
 bin/act
 
+# test scripts
+./dataloader_to_paths.py
+./script.py
+./test_dataloader.py
+
 # =============================================================================
 # Documentation
 # =============================================================================
@@ -124,3 +129,4 @@ docs/build/
 *.md
 *.png
 *.jpg
+*.md

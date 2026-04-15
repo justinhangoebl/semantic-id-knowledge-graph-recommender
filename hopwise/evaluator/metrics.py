@@ -31,6 +31,7 @@ from collections import Counter
 from logging import getLogger
 
 import numpy as np
+import torch
 from sklearn.metrics import auc as sk_auc
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
@@ -232,8 +233,81 @@ class Precision(TopkMetric):
         return pos_index.cumsum(axis=1) / np.arange(1, pos_index.shape[1] + 1)
 
 
-# CTR Metrics
+class SemanticTopkMetric(TopkMetric):
+    """Top-k metric base class that operates on semantic-id matches."""
 
+    metric_need = ["rec.semantic_topk"]
+
+    def used_info(self, dataobject):
+        rec_mat = dataobject.get("rec.semantic_topk")
+        self.topk = dataobject.get("topk")
+        topk_idx, pos_len_list = torch.split(rec_mat, [max(self.topk), 1], dim=1)
+        return topk_idx.to(torch.bool).numpy(), pos_len_list.squeeze(-1).numpy()
+
+
+class SemHit(SemanticTopkMetric):
+    """Semantic-ID Hit@K."""
+
+    def calculate_metric(self, dataobject):
+        pos_index, _ = self.used_info(dataobject)
+        result = self.metric_info(pos_index)
+        metric_dict = self.topk_result("hit", result)
+        return metric_dict
+
+    def metric_info(self, pos_index):
+        result = np.cumsum(pos_index, axis=1)
+        return (result > 0).astype(int)
+
+
+class SemMRR(SemanticTopkMetric):
+    """Semantic-ID MRR@K."""
+
+    def calculate_metric(self, dataobject):
+        pos_index, _ = self.used_info(dataobject)
+        result = self.metric_info(pos_index)
+        metric_dict = self.topk_result("mrr", result)
+        return metric_dict
+
+    def metric_info(self, pos_index):
+        idxs = pos_index.argmax(axis=1)
+        result = np.zeros_like(pos_index, dtype=np.float64)
+        for row, idx in enumerate(idxs):
+            if pos_index[row, idx] > 0:
+                result[row, idx:] = 1 / (idx + 1)
+            else:
+                result[row, idx:] = 0
+        return result
+
+
+class SemNDCG(SemanticTopkMetric):
+    """Semantic-ID NDCG@K."""
+
+    def calculate_metric(self, dataobject):
+        pos_index, pos_len = self.used_info(dataobject)
+        result = self.metric_info(pos_index, pos_len)
+        metric_dict = self.topk_result("ndcg", result)
+        return metric_dict
+
+    def metric_info(self, pos_index, pos_len):
+        len_rank = np.full_like(pos_len, pos_index.shape[1])
+        idcg_len = np.where(pos_len > len_rank, len_rank, pos_len)
+
+        iranks = np.zeros_like(pos_index, dtype=np.float64)
+        iranks[:, :] = np.arange(1, pos_index.shape[1] + 1)
+        idcg = np.cumsum(1.0 / np.log2(iranks + 1), axis=1)
+        for row, idx in enumerate(idcg_len):
+            idcg[row, idx:] = idcg[row, idx - 1]
+
+        ranks = np.zeros_like(pos_index, dtype=np.float64)
+        ranks[:, :] = np.arange(1, pos_index.shape[1] + 1)
+        dcg = 1.0 / np.log2(ranks + 1)
+        dcg = np.cumsum(np.where(pos_index, dcg, 0), axis=1)
+
+        result = dcg / idcg
+        return result
+
+
+# CTR Metrics
 
 class GAUC(AbstractMetric):
     r"""GAUC (also known as Grouped Area Under Curve) is used to evaluate the two-class model, referring to

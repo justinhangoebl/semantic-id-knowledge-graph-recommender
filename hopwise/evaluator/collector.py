@@ -15,6 +15,8 @@ import copy
 
 import torch
 
+from hopwise.utils import PathLanguageModelingTokenType
+
 from hopwise.evaluator.register import Register, Register_KG
 from hopwise.evaluator.utils import train_tsne
 
@@ -240,7 +242,15 @@ class Collector:
                 self.data_struct._data_dict[key] = self.data_struct._data_dict[key].cpu()
 
         returned_struct = copy.deepcopy(self.data_struct)
-        for key in ["rec.topk", "rec.meanrank", "rec.score", "rec.items", "data.label", "rec.paths"]:
+        for key in [
+            "rec.topk",
+            "rec.semantic_topk",
+            "rec.meanrank",
+            "rec.score",
+            "rec.items",
+            "data.label",
+            "rec.paths",
+        ]:
             if key in self.data_struct:
                 del self.data_struct[key]
 
@@ -329,3 +339,123 @@ class ExplainableCollector(Collector):
 
         if self.register.need("rec.paths"):
             self.data_struct.update_tensor("rec.paths", paths)
+
+
+class SPRIGSemanticCollector(ExplainableCollector):
+    """Collector that computes semantic-ID top-k matches for SPRIG."""
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.semantic_vocab = None
+        self.tokenizer = None
+        self.semantic_ids_per_item = config["semantic_ids_per_item"]
+        self.sem_prefix = PathLanguageModelingTokenType.SEMANTIC.token
+
+        if any(metric.lower() in {"hit", "mrr", "ndcg"} for metric in config["metrics"]):
+            setattr(self.register, "rec.semantic_topk", True)
+
+    def set_semantic_resources(self, dataset):
+        if hasattr(dataset, "semantic_vocab"):
+            self.semantic_vocab = dataset.semantic_vocab
+        if hasattr(dataset, "tokenizer"):
+            self.tokenizer = dataset.tokenizer
+        if self.semantic_ids_per_item is None and self.semantic_vocab is not None:
+            self.semantic_ids_per_item = self.semantic_vocab.num_semantic_tokens_per_item()
+
+    def train_data_collect(self, train_data):
+        super().train_data_collect(train_data)
+        self.set_semantic_resources(train_data.dataset)
+
+    def _extract_last_sem_block(self, seq_tokens):
+        if self.tokenizer is None:
+            return None
+        if self.semantic_ids_per_item is None:
+            return None
+
+        last_block = None
+        i = 0
+        while i < len(seq_tokens):
+            if seq_tokens[i].startswith(self.sem_prefix):
+                block = []
+                j = i
+                while j < len(seq_tokens) and seq_tokens[j].startswith(self.sem_prefix) and len(block) < self.semantic_ids_per_item:
+                    block.append(seq_tokens[j])
+                    j += 1
+                if len(block) == self.semantic_ids_per_item:
+                    last_block = block
+                i = j
+            else:
+                i += 1
+
+        if last_block is None:
+            return None
+
+        token_ids = tuple(self.tokenizer.convert_tokens_to_ids(tok) for tok in last_block)
+        if hasattr(self.tokenizer, "unk_token_id") and self.tokenizer.unk_token_id in token_ids:
+            return None
+        return token_ids
+
+    def eval_batch_collect(
+        self,
+        explanations,
+        interaction,
+        positive_u: torch.Tensor,
+        positive_i: torch.Tensor,
+    ):
+        scores, paths = explanations
+        super().eval_batch_collect(explanations, interaction, positive_u, positive_i)
+
+        if not self.register.need("rec.semantic_topk"):
+            return
+
+        if self.semantic_vocab is None or self.tokenizer is None:
+            raise ValueError("SPRIG semantic evaluation requires semantic_vocab and tokenizer.")
+
+        uid_field = self.config["USER_ID_FIELD"]
+        batch_user_ids = interaction[uid_field].tolist()
+        uid_to_batch = {int(uid): idx for idx, uid in enumerate(batch_user_ids)}
+
+        user_candidates = {idx: [] for idx in range(scores.size(0))}
+        for uid, _, seq_score, seq_tokens in paths:
+            batch_idx = uid_to_batch.get(int(uid))
+            if batch_idx is None:
+                continue
+            sem_tuple = self._extract_last_sem_block(seq_tokens)
+            if sem_tuple is None:
+                continue
+            user_candidates[batch_idx].append((float(seq_score), sem_tuple))
+
+        user_pos_sem = {idx: set() for idx in range(scores.size(0))}
+        for u, i in zip(positive_u.tolist(), positive_i.tolist()):
+            if i not in self.semantic_vocab:
+                continue
+            sem_tuple = tuple(self.semantic_vocab.get_item_tokens(i))
+            user_pos_sem[int(u)].add(sem_tuple)
+
+        max_k = max(self.topk)
+        pos_idx = torch.zeros((scores.size(0), max_k), dtype=torch.int, device=self.device)
+        pos_len_list = torch.zeros((scores.size(0), 1), dtype=torch.int, device=self.device)
+
+        for batch_idx in range(scores.size(0)):
+            pos_set = user_pos_sem.get(batch_idx, set())
+            pos_len_list[batch_idx, 0] = len(pos_set)
+            if not pos_set:
+                continue
+
+            candidates = sorted(user_candidates.get(batch_idx, []), key=lambda x: x[0], reverse=True)
+            seen = set()
+            ranked = []
+            for _, sem_tuple in candidates:
+                if sem_tuple in seen:
+                    continue
+                seen.add(sem_tuple)
+                ranked.append(sem_tuple)
+                if len(ranked) >= max_k:
+                    break
+
+            for j, sem_tuple in enumerate(ranked):
+                if sem_tuple in pos_set:
+                    pos_idx[batch_idx, j] = 1
+
+        result = torch.cat((pos_idx, pos_len_list), dim=1)
+        self.data_struct.update_tensor("rec.semantic_topk", result)

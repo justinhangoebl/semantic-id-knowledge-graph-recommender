@@ -51,3 +51,22 @@ class Evaluator_KG(Evaluator):
 
         for metric in self.metrics:
             self.metric_class[metric] = metrics_dict[metric](self.config)
+
+
+class SPRIGEvaluator(Evaluator):
+    """Evaluator that swaps Hit/MRR/NDCG with semantic-ID variants for SPRIG."""
+
+    _SEMANTIC_MAP = {
+        "hit": "semhit",
+        "mrr": "semmrr",
+        "ndcg": "semndcg",
+    }
+
+    def __init__(self, config):
+        self.config = config
+        self.metrics = [metric.lower() for metric in self.config["metrics"]]
+        self.metric_class = {}
+
+        for metric in self.metrics:
+            mapped = self._SEMANTIC_MAP.get(metric, metric)
+            self.metric_class[metric] = metrics_dict[mapped](self.config)

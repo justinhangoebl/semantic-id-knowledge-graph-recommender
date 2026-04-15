@@ -178,7 +178,7 @@ class KnowledgePathDataset(KnowledgeBasedDataset):
         token_vocab = self.tokenizer.get_vocab()
         graph = self._create_ckg_igraph(show_relation=True, directed=False)
         vertex_metadata, edge_metadata = graph.to_dict_list()
-
+        
         def igraph_id_to_tokenizer_id(igraph_head, igraph_relation, igraph_tail):
             ret = []
             triple = [igraph_head, igraph_relation, igraph_tail]
@@ -207,11 +207,15 @@ class KnowledgePathDataset(KnowledgeBasedDataset):
             return ret
 
         tokenized_kg = {}
+        skipped_edges = 0
         for edge in edge_metadata:
             head = edge["source"]
             tail = edge["target"]
             relation = edge["type"]
             relation_id = self.field2token_id[self.relation_field][relation]
+            if head is None or tail is None:
+                skipped_edges += 1
+                continue
 
             head_token, relation_token, tail_token = igraph_id_to_tokenizer_id(head, relation_id, tail)
 
@@ -234,6 +238,29 @@ class KnowledgePathDataset(KnowledgeBasedDataset):
 
             tokenized_kg[tail_token][relation_token].add(head_token)
 
+        if skipped_edges > 0:
+            self.logger.warning(
+                "SPRIG tokenized CKG: skipped %d edges due to missing semantic mapping.",
+                skipped_edges,
+            )
+        edge_count = sum(
+            len(tails) for rels in tokenized_kg.values() for tails in rels.values()
+        )
+        self.logger.info(
+            "Tokenized CKG summary: nodes=%d, edges=%d, graph_edges=%d, items=%d, users=%d, entities=%d",
+            len(tokenized_kg),
+            edge_count,
+            graph.ecount(),
+            self.item_num,
+            self.user_num,
+            self.entity_num,
+        )
+        if tokenized_kg:
+            sample_heads = list(tokenized_kg.keys())[:5]
+            self.logger.debug(
+                "Tokenized CKG sample heads (token ids): %s",
+                sample_heads,
+            )
         return tokenized_kg
 
     def tokenize(self, data):
@@ -250,7 +277,8 @@ class KnowledgePathDataset(KnowledgeBasedDataset):
         """Tokenize the path dataset."""
 
         if self._tokenized_dataset is None:
-            tokenized_dataset = self.tokenize(self.path_dataset.split("\n"))
+            path_rows = [path for path in self.path_dataset.splitlines() if path.strip()]
+            tokenized_dataset = self.tokenize(path_rows)
             tokenized_dataset = Interaction(tokenized_dataset.data)
             correct_path_mask = [
                 all(spec_token not in path[1:-1] for spec_token in self.tokenizer.all_special_ids)
@@ -687,21 +715,31 @@ class KnowledgePathDataset(KnowledgeBasedDataset):
         return path_string
 
     def _add_paths_relations(self, graph, paths):
-        n_paths = len(paths)
-        paths_array = np.full((n_paths, self.path_hop_length + 1), fill_value=self.PATH_PADDING, dtype=int)
-        for i, path in enumerate(paths):
-            paths_array[i, : len(path)] = path
+        relation_token_id = self.field2token_id[self.relation_field]
+        edge_rel: dict = {}
+        for edge in graph.es:
+            rid = relation_token_id[edge["type"]]
+            edge_rel[(edge.source, edge.target)] = rid
+            if not graph.is_directed():
+                edge_rel[(edge.target, edge.source)] = rid
 
+        n_paths = len(paths)
         complete_path_length = self.path_hop_length * 2 + 1
         paths_with_relations = np.full((n_paths, complete_path_length), fill_value=self.PATH_PADDING, dtype=int)
-        relation_token_id = self.field2token_id[self.relation_field]
-        relation_map = np.zeros((len(graph.vs), len(graph.vs)), dtype=int)
-        for edge in graph.es:
-            relation_map[edge.source, edge.target] = relation_token_id[edge["type"]]
-            if not graph.is_directed():
-                relation_map[edge.target, edge.source] = relation_token_id[edge["type"]]
 
-        _add_paths_relations_parallel(paths_array, paths_with_relations, relation_map)
+        for i, path in enumerate(paths):
+            nodes = path if isinstance(path, (list, tuple)) else path.tolist()
+            pos = 0
+            for j, node in enumerate(nodes):
+                if pos >= complete_path_length:
+                    break
+                paths_with_relations[i, pos] = node
+                pos += 1
+                if j + 1 < len(nodes) and pos < complete_path_length:
+                    paths_with_relations[i, pos] = edge_rel.get(
+                        (int(node), int(nodes[j + 1])), self.PATH_PADDING
+                    )
+                    pos += 1
 
         return paths_with_relations
 
@@ -754,29 +792,25 @@ def _generate_user_paths_constrained_random_walk_per_user(graph, used_ids, iid_f
         user_path_sample_size = 0
         user_invalid_paths = max_consecutive_invalid
 
-        def _graph_traversal(g, path, hop, candidates=None):
+        # Precompute vertex types once as a plain list for O(1) access
+        node_types = graph.vs["type"]
+
+        def _graph_traversal(g, path, hop, candidates_set=None):
             nonlocal user_paths
             nonlocal user_path_sample_size
             nonlocal user_invalid_paths
 
-            if hop == 1 and candidates is not None:
-                next_node_candidates = g.es.select(_source=path[-1], _target=candidates)
-                next_node_candidates = list(
-                    set(e.source if e.source_vertex != path[-1] else e.target for e in next_node_candidates)
-                )
+            if hop == 1 and candidates_set is not None:
+                # O(degree) set intersection instead of O(|E|) g.es.select()
+                next_node_candidates = list(candidates_set.intersection(g.neighbors(path[-1])))
             else:
-
-                def _check_next_candidate(node):
-                    if hop == 1:
-                        type_check = g.vs[node]["type"] == iid_field
-                    elif collaborative_path:
-                        type_check = g.vs[node]["type"] != iid_field
-                    else:
-                        type_check = g.vs[node]["type"] == entity_field
-
-                    return type_check and node != path[-1]
-
-                next_node_candidates = [v for v in g.neighbors(path[-1]) if _check_next_candidate(v)]
+                last = path[-1]
+                if hop == 1:
+                    next_node_candidates = [v for v in g.neighbors(last) if node_types[v] == iid_field and v != last]
+                elif collaborative_path:
+                    next_node_candidates = [v for v in g.neighbors(last) if node_types[v] != iid_field and v != last]
+                else:
+                    next_node_candidates = [v for v in g.neighbors(last) if node_types[v] == entity_field and v != last]
 
             next_nodes = np.random.choice(
                 next_node_candidates, min(len(next_node_candidates), paths_per_hop), replace=False
@@ -788,10 +822,11 @@ def _generate_user_paths_constrained_random_walk_per_user(graph, used_ids, iid_f
                     user_paths.add(new_path)
                     user_path_sample_size += 1
                 else:
-                    _graph_traversal(g, new_path, hop - 1, candidates)
+                    _graph_traversal(g, new_path, hop - 1, candidates_set)
 
                 if user_path_sample_size == max_paths_per_user:
                     return
+
 
         while True:
             pos_iid_range = _check_temporal_causality_feasibility(temporal_matrix, pos_iid)
@@ -853,6 +888,8 @@ def _generate_user_paths_weighted_random_walk_per_user(graph, used_ids, iid_fiel
         user_path_sample_size = 0
         user_invalid_paths = max_consecutive_invalid
         while True:
+            start_node_idx = -1
+            start_node = None
             if iid_tries == 0:
                 iid_tries = max_tries_per_iid
 
@@ -872,6 +909,8 @@ def _generate_user_paths_weighted_random_walk_per_user(graph, used_ids, iid_fiel
             else:
                 item_candidates = None
 
+            valid_path = False
+            full_path = (None, None)
             while iid_tries > 0:
                 # First hop is the relation user-item already addressed
                 generated_path = graph.random_walk(start_node, path_hop_length, weights="weight")

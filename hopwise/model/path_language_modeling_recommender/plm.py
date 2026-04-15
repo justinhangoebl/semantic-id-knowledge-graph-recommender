@@ -160,7 +160,10 @@ class PLM(ExplainablePathLanguageModelingRecommender, GPT2LMHeadModel):
             entity_labels_mask = (token_type_ids[0, 1:-1] != self.token_relation_type_id).to(lm_entity_scores.device)
             shifted_entity_scores = lm_entity_scores[:, :-1, :][:, entity_scores_mask, :].contiguous()
             entity_labels = labels[:, 1:-1][:, entity_labels_mask].contiguous()
-            lm_loss = self.entity_loss(shifted_entity_scores.view(-1, self.config.vocab_size), entity_labels.view(-1))
+            lm_loss = lm_entity_scores.sum() * 0.0
+            flat_entity_labels = entity_labels.view(-1)
+            if flat_entity_labels.numel() > 0:
+                lm_loss = self.entity_loss(shifted_entity_scores.view(-1, self.config.vocab_size), flat_entity_labels)
 
             # relation head loss
             relations_scores_mask = (token_type_ids[0, 1:-1] != self.token_relation_type_id).to(
@@ -169,9 +172,11 @@ class PLM(ExplainablePathLanguageModelingRecommender, GPT2LMHeadModel):
             relation_labels_mask = (token_type_ids[0, 1:] != self.token_entity_type_id).to(lm_entity_scores.device)
             shifted_relation_scores = lm_relation_scores[:, 1:-1, :][:, relations_scores_mask, :].contiguous()
             relation_labels = labels[:, 1:][:, relation_labels_mask].contiguous()
-            lm_loss += self.relation_loss(
-                shifted_relation_scores.view(-1, self.config.vocab_size), relation_labels.view(-1)
-            )
+            flat_relation_labels = relation_labels.view(-1)
+            if flat_relation_labels.numel() > 0:
+                lm_loss = lm_loss + self.relation_loss(
+                    shifted_relation_scores.view(-1, self.config.vocab_size), flat_relation_labels
+                )
 
         lm_scores = lm_entity_scores
         relation_idx = torch.arange(1, input_ids.shape[1], 2, device=input_ids.device)

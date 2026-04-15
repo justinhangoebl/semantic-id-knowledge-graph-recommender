@@ -149,3 +149,10 @@ class PathLanguageModelingTokenType(Enum):
 
     def __str__(self):
         return self.token
+    
+    @staticmethod
+    def get_prefix_length(value: str):
+        for token_type in PathLanguageModelingTokenType:
+            if value.startswith(token_type.token):
+                return len(token_type.token)
+        raise ValueError("Unknown prefix")

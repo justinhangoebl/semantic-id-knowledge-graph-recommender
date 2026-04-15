@@ -56,7 +56,13 @@ def create_dataset(config):
 
     default_file = os.path.join(config["checkpoint_dir"], f"{config['dataset']}-{dataset_class.__name__}.pth")
     file = config["dataset_save_path"] or default_file
-    if os.path.exists(file):
+
+    # SPRIG is sensitive to sequence-length logic changes. Reusing pickled
+    # dataset objects across code revisions can keep stale token_sequence_length
+    # and trigger positional-embedding overflows.
+    #skip_cached_dataset = config["model"] == "SPRIG"
+
+    if os.path.exists(file) and not skip_cached_dataset:
         with open(file, "rb") as f:
             dataset = pickle.load(f)
         dataset_args_unchanged = True
@@ -155,6 +161,11 @@ def load_split_dataloaders(config):
     Returns:
         dataloaders (tuple of AbstractDataLoader or None): The split dataloaders.
     """
+
+    # Same rationale as create_dataset(): avoid stale serialized dataloaders
+    # for SPRIG after sequence-length formula updates.
+#    if config["model"] == "SPRIG":
+#        return None
 
     if config["MODEL_TYPE"] == ModelType.PATH_LANGUAGE_MODELING:
         dataloaders_folder = f"{config['model']} - {config['dataset']} - dataloaders"

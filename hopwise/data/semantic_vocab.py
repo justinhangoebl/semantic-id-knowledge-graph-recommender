@@ -58,6 +58,7 @@ class SemanticVocab:
 
     # Public API
     def get_item_tokens(self, item_id: int) -> List[int]:
+        
         return list(self.item_to_token_ids[int(item_id)])
 
     def get_first_token(self, item_id: int) -> int:
@@ -70,7 +71,7 @@ class SemanticVocab:
     def all_item_ids(self) -> Set[int]:
         return set(self.item_to_token_ids.keys())
 
-    def num_semantic_tokens(self) -> int:
+    def num_semantic_tokens_per_item(self) -> int:
         return int(self._semantic_ids_per_item)
 
     # convenience dunders
