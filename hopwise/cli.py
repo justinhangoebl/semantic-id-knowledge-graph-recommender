@@ -391,7 +391,6 @@ def tune(
 def models(verbose, model_types):
     """List available models."""
     model_types_map = {
-        "KG-embed": "knowledge_graph_embedding_recommender",
         "PathLM": "path_language_modeling_recommender",
         "Sequential": "sequential_recommender",
         "all": "all",

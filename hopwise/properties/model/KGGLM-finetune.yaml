@@ -1,15 +1,14 @@
-# OVERAL.yaml
 # Environment Settings
 worker: 0                       # (int) The number of workers processing the data.
 use_gpu: True                   # (bool) Whether or not to use GPU.
-seed: 2024                      # (int) Random seed.
+seed: 2026                      # (int) Random seed.
 state: INFO                     # (str) Logging level.
 reproducibility: True           # (bool) Whether or not to make results reproducible.
 data_path: './dataset/'           # (str) The path of input dataset.
 checkpoint_dir: 'saved'         # (str) The path to save checkpoint file.
 show_progress: True             # (bool) Whether or not to show the progress bar of every epoch.
-save_dataset: False             # (bool) Whether or not to save filtered dataset.
-dataset_save_path: ~            # (str) The path of saved dataset.
+save_dataset: True             # (bool) Whether or not to save filtered dataset.
+dataset_save_path: './saved/dataset'            # (str) The path of saved dataset.
 save_dataloaders: True         # (bool) Whether or not save split dataloaders.
 dataloaders_save_path: './dataloader/' # (str) The path of saved dataloaders.
 log_wandb: True                # (bool) Whether or not to use Weights & Biases(W&B).
@@ -29,9 +28,9 @@ transform: ~                    # (str) The transform operation for batch data p
 
 # Evaluation Settings only for FineTune
 eval_args:                      # (dict) 4 keys: group_by, order, split, and mode
-  split: {'RS':[0.8,0.1,0.1]}   # (dict) The splitting strategy ranging in ['RS','LS'].
+  split: {'RS':[0.6,0.2,0.2]}   # (dict) The splitting strategy ranging in ['RS','LS'].
   group_by: user                # (str) The grouping strategy ranging in ['user', 'none'].
-  order: RO                     # (str) The ordering strategy ranging in ['RO', 'TO'].
+  order: TO                     # (str) The ordering strategy ranging in ['RO', 'TO'].
   mode: full                    # (str) The evaluation mode ranging in ['full','unixxx','popxxx','labeled'].
 
 repeatable: False               # (bool) Whether to evaluate results with a repeatable recommendation scene.
@@ -40,13 +39,11 @@ topk: [10]                      # (list or int or None) The value of k for topk 
 valid_metric: NDCG@10           # (str) The evaluation metric for early stopping.
 valid_metric_bigger: True       # (bool) Whether to take a bigger valid metric value as a better result.
 
-# Sample.yaml
 numerical_features: []          # (list) Float feature fields to be embedded
 additional_feat_suffix: ~       # (list) Control loading additional atomic files.
 user_inter_num_interval: ~    # (str) User interval for filtering inter, such as [A,B] / [A,B) / (A,B) / (A,B].     [5,inf)
 item_inter_num_interval: ~    # (str) Item interval for filtering inter, such as [A,B] / [A,B) / (A,B) / (A,B].     [5,inf)
 
-# knowledge_path_base.yaml
 train_neg_sample_args:
     sample_num: "none"
 load_col:
@@ -58,7 +55,6 @@ load_col:
 entity_kg_num_interval: "[0,inf)"       # (str) Entity interval for filtering kg.
 relation_kg_num_interval: "[0,inf)"     # (str) Relation interval for filtering kg.
 
-# ml-1m.yaml8
 # Atomic File Format
 field_separator: "\t"           # (str) Separator of different columns in atomic files.
 seq_separator: " "              # (str) Separator inside the sequence features.
@@ -72,34 +68,6 @@ seq_len: ~                      # (dict) Field name of sequence feature: maximum
 LABEL_FIELD: label              # (str) Expected field name of the generated labels for point-wise dataLoaders.
 threshold: ~                    # (dict) 0/1 labels will be generated according to the pairs.
 NEG_PREFIX: neg_                # (str) Negative sampling prefix for pair-wise dataLoaders.
-
-#
-## knowledge_path_base.yaml
-#train_neg_sample_args:
-#    sample_num: "none"
-#load_col:
-#    inter: ['user_id', 'tracks_id', 'timestamp', 'num_repeat']
-#    kg: ['head_id', 'relation_id', 'tail_id']
-#    link: ['tracks_id', 'entity_id']
-#
-## Data preprocessing for knowledge graph triples
-#entity_kg_num_interval: "[0,inf)"       # (str) Entity interval for filtering kg.
-#relation_kg_num_interval: "[0,inf)"     # (str) Relation interval for filtering kg.
-#
-## ml-1m.yaml8
-## Atomic File Format
-#field_separator: "\t"           # (str) Separator of different columns in atomic files.
-#seq_separator: " "              # (str) Separator inside the sequence features.
-#
-## Basic Information
-#USER_ID_FIELD: user_id          # (str) Field name of user ID feature.
-#ITEM_ID_FIELD: tracks_id          # (str) Field name of item ID feature.
-#RATING_FIELD: num_repeat            # (str) Field name of rating feature.
-#TIME_FIELD: timestamp           # (str) Field name of timestamp feature.
-#seq_len: ~                      # (dict) Field name of sequence feature: maximum length of each sequence
-#LABEL_FIELD: label              # (str) Expected field name of the generated labels for point-wise dataLoaders.
-#threshold: ~                    # (dict) 0/1 labels will be generated according to the pairs.
-#NEG_PREFIX: neg_                # (str) Negative sampling prefix for pair-wise dataLoaders.
 
 # Sequential Model Needed
 ITEM_LIST_LENGTH_FIELD: item_length   # (str) Field name of the feature representing item sequences' length.
@@ -146,56 +114,40 @@ preload_weight: ~               # (dict) Preloaded weight in {IDs (token): pretr
 normalize_field: ~              # (list) List of filed names to be normalized.
 normalize_all: True            # (bool) Whether or not to normalize all the float like fields.
 
-# KGGLM.yaml
 gpu_id: '5'                                         # (str) The id of GPU device(s).
 
-wandb_project: 'KGGLM - pre - ml-1m 2 week run'     # (str) The project name in W&B.        ml-1m
 wandb_project: 'KGGLM - ml1m' # (str) The project name in W&B.            ml1m
-#wandb_project: 'KGGLM - pre - lfm-1b-tracks'               # (str) The project name in W&B.        lfm-1b
 
-train_stage: 'pretrain'                            # (str) The training stage. Range in ['pretrain', 'finetune'].
-pre_model_path: ''                                 # (str) The path of pretrained model.
+train_stage: 'finetune'                             # (str) The training stage. Range in ['pretrain', 'finetune'].
+pre_model_path: './saved/huggingface-distilgpt2-KGGLM-onion-pretrained-3.pth/checkpoint-203550/'      # (str) The path of pretrained model. ml-1m
 
-#train_stage: 'finetune'                             # (str) The training stage. Range in ['pretrain', 'finetune'].
-#pre_model_path: './saved/huggingface-distilgpt2-KGGLM-ml-1m-pretrained-5.pth/checkpoint-756430/'      # (str) The path of pretrained model. ml-1m
-#pre_model_path: './saved/huggingface-distilgpt2-KGGLM-ml1m-pretrained-5.pth/checkpoint-134285/'      # (str) The path of pretrained model. ml1m
-#pre_model_path: './saved/huggingface-distilgpt2-KGGLM-lfm-1b-pretrained-5.pth/checkpoint-170555/'    # (str) The path of pretrained model. lfm-1b
+learning_rate: 2e-4            # (float) Learning rate for optimizer.                      ml1m
+weight_decay: 0.05              # (float) Weight decay for optimizer.                       ml1m
+warmup_steps: 500               # (int) Number of warmup steps for learning rate scheduler. ml1m
 
-learning_rate: 2e-5             # (float) Learning rate for optimizer.                      ml-1m
-weight_decay: 0.01              # (float) Weight decay for optimizer.                       ml-1m
-warmup_steps: 500               # (int) Number of warmup steps for learning rate scheduler. ml-1m
-
-learning_rate: 2e-5             # (float) Learning rate for optimizer.                      ml1m
-weight_decay: 0.01              # (float) Weight decay for optimizer.                       ml1m
-warmup_steps: 750               # (int) Number of warmup steps for learning rate scheduler. ml1m
-
-#learning_rate: 2e-5             # (float) Learning rate for optimizer.                      lfm-1b
-#weight_decay: 0.01              # (float) Weight decay for optimizer.                       lfm-1b
-#warmup_steps: 250               # (int) Number of warmup steps for learning rate scheduler. lfm-1b
-
-embedding_size: 768             # (int) Size of the embeddings.
+embedding_size: 768            # (int) Size of the embeddings.
 num_heads: 12                   # (int) Number of heads in the multi-head attention.
 num_layers: 6                   # (int) Number of layers in the transformer.
-use_kg_token_types: True        # (bool) Whether to use token types for the knowledge graph.
 
-path_hop_length: 5              # (int) Number of hops in the knowledge path.
-MAX_PATHS_PER_USER: 500        # (int) Maximum number of kg sampled paths per user.
+path_hop_length: 3              # (int) Number of hops in the knowledge path.
+MAX_PATHS_PER_USER: 250        # (int) Maximum number of kg sampled paths per user.
+use_kg_token_types: False        # (bool) Whether to use token types for the knowledge graph.
 
 pretrain_epochs: 5              # (int) Number of epochs for pre-training.
-epochs: 15                       # (int) The number of training epochs.
+epochs: 4                       # (int) The number of training epochs.
 
 train_batch_size: 256           # (int) The training batch size.
 eval_batch_size: 128           # (int) The evaluation batch size.
 save_step: 50                   # (int) Number of steps to save the model during pre-training.
 metric_decimal_place: 4         # (int) The decimal place of metric scores.
-learner: adamW                  # (str) The name of used optimizer.
+learner: adam                  # (str) The name of used optimizer.
 
 base_model: distilgpt2
 sequence_postprocessor: BeamSearch
 
 path_generation_args:
-    paths_per_user: 10          # (int) Number of paths generated per user.
-    num_beams: 20               # (int) Number of beams for beam search.
+    paths_per_user: 50          # (int) Number of paths generated per user.
+    num_beams: 60               # (int) Number of beams for beam search.
     num_beam_groups: 5          # (int) Number of groups for diverse beam search.
     diversity_penalty: 0.3      # (float) Diversity penalty for beam search.
     length_penalty: 0.0         # (float) Length penalty for beam search.
@@ -204,14 +156,14 @@ path_generation_args:
     do_sample: False            # (bool) Whether to use sampling ; use greedy decoding otherwise.
 
 path_sample_args:
-    temporal_causality: False   # (bool) Whether to use temporal causality.
-    collaborative_path: True    # (bool) Whether to include users in sampled paths.
+    temporal_causality: True   # (bool) Whether to use temporal causality.
+    collaborative_path: False    # (bool) Whether to include users in sampled paths.
     strategy: constrained-rw    # (str) Strategy for sampling paths.
     path_token_separator: " "   # (str) Token separator for paths.
     restrict_by_phase: True    # (bool) Whether to restrict the last item in the reasoning path by the used ids in the dataloader phase (for fine-tuning, set True).
     MAX_CONSECUTIVE_INVALID: 10 # (int) Maximum number of consecutive invalid paths per user.
-    MAX_RW_PATHS_PER_HOP: 5    # (int) Maximum number of paths sampled at each hop for constrained random walk.
+    MAX_RW_PATHS_PER_HOP: 15    # (int) Maximum number of paths sampled at each hop for constrained random walk.
     parallel_max_workers: 36    # (int) Maximum number of workers for parallel processing.
     pretrain_hop_length: (5, 5)  # (tuple) The range of the hop length for pre-training. Paper uses 5 hops.
-    pretrain_paths: 500          # (int) Number of paths per entity for pre-training. Paper uses 500.
-    MAX_RW_TRIES_PER_IID: 1      # (int) Maximum number of tries per entity. Paper likely uses 1 (no retry for speed).
+    pretrain_paths: 250          # (int) Number of paths per entity for pre-training. Paper uses 500.
+    MAX_RW_TRIES_PER_IID: 10      # (int) Maximum number of tries per entity. Paper likely uses 1 (no retry for speed).

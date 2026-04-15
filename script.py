@@ -1,109 +1,38 @@
 import pandas as pd
 import pickle
-from tqdm import tqdm 
 
+def fix_semanticids_item_ids(
+    semanticids_path="./dataset/ml1m/ml1m.semanticids",
+    link_path="./dataset/ml1m/ml1m.link",
+    output_path="./dataset/ml1m/ml1m.semanticids_linked",
+):
+    """Rewrite semanticids to use entity IDs from link file.
 
-def test_sem_id_files():
-    semantic_ids = (
-        pd.read_csv("./dataset/ml1m/ml1m.semanticids", sep=",", index_col=0)['semantic_ids']
-        .str.strip("\"[]\"")
-        .str.split(", ")
-        .apply(lambda x: [int(i) for i in x])
-    ).to_dict()
+    - item_id is mapped to entity_id using the link file.
+    - rows without a link entry are skipped and counted.
+    """
+    df = pd.read_csv(semanticids_path, sep=",")
+    links = pd.read_csv(link_path, sep="\t", header=0)
+    link_map = dict(zip(links["item_id:token"], links["entity_id:token"]))
 
-    print("Semantic IDs loaded and processed.")
-    
-    return semantic_ids
-    
-import pickle
-from tqdm import tqdm
-
-def convert_KGGLM_to_SPRIG_paths():
-    print("Converting KGGLM paths to SPRIG paths...")
-    
-    # Load your source paths
-    try:
-        with open("./paths/KGGLM-ml-1m.pkl", "rb") as f:
-            kgglm_paths = pickle.load(f)
-        print(f"KGGLM paths loaded. Found {len(kgglm_paths)} paths.")
-    except FileNotFoundError:
-        print("Error: Source pkl file not found.")
-        return
-
-    # Assuming test_sem_id_files() returns a dict or mapping if needed later
-    # For now, we use the explicit mapping provided: I109 -> [SEM12, SEM54, SEM64]
-    target_mapping = test_sem_id_files()  # Load semantic IDs if needed for mapping
-    
-    sprig_paths = []
-    errors = 0
-    
-    for path in tqdm(kgglm_paths, desc=f"Converting paths {errors}"):
-        new_path = ""
-        for token in path.split(" "):
-            # Check if token needs conversion
-            if token.startswith("I"):
-                sem = target_mapping.get(int(token[1:]), [])
-                if sem:
-                    new_path += " " + " ".join(f"SEM{sem_id}" for sem_id in sem)
-                else:
-                    new_path += " " + token  # If no mapping, keep original
-                    errors += 1
-            else:
-                new_path += " " + token
-        
-        sprig_paths.append(new_path[1:])
-
-    # Preview the conversion (using your example data logic)
-    print("\nSample Conversion:")
-    print(f"Original: {kgglm_paths[32] if kgglm_paths else 'N/A'}")
-    print(f"Converted: {sprig_paths[32] if sprig_paths else 'N/A'}")
-
-    print(f"Conversion completed with {errors} unmapped tokens.")
-    # Save the result
-    with open("./paths/SPRIG-ml-1m.pkl", "wb") as f:
-        pickle.dump(sprig_paths, f)
-    print("Conversion complete and saved.")
-
-# Note: Ensure test_sem_id_files is defined in your environment
-import os
-
-def look_pkl():
-    cache_file = (
-        f"./paths/SPRIG - ml-1m_sprig_pretrain_raw_(5, 5).pkl"
-    )
-
-    if os.path.exists(cache_file):
-        print(
-            "Loading cached SPRIG pretrain raw paths from %s …", cache_file
-        )
-        with open(cache_file, "rb") as fh:
-            raw_paths = pickle.load(fh)  # list of numpy path arrays
-    for x in raw_paths:
-        print(x)
-        break
-
-def transform_spaces():
-    smeantic_ids = test_sem_id_files()
-    links = pd.read_csv("./dataset/ml1m/ml1m.link", sep="\t", header=0)
-    lsit = []
-    for item_id, sem_ids in smeantic_ids.items():
-        print(f"Processing item_id: {item_id} with semantic IDs: {sem_ids}")
-        
-        # Find the corresponding entity_id for this item_id
-        entity_id = links.loc[links['item_id:token'] == item_id, 'entity_id:token'].values
-        if len(entity_id) == 0:
-            print(f"Warning: No entity_id found for item_id {item_id}. Skipping.")
+    rows = []
+    skipped = 0
+    for _, row in df.iterrows():
+        item_id = int(row["item_id"])
+        entity_id = link_map.get(item_id)
+        if entity_id is None:
+            skipped += 1
             continue
-        entity_id = entity_id[0]  # Assuming one-to-one mapping
-        print(f"Found entity_id: {entity_id} for item_id: {item_id}")
-        # Create the new format string
-        lsit.append({
-            "item_id": entity_id,
-            "semantic_ids": sem_ids
+        rows.append({
+            "item_id": int(entity_id),
+            "semantic_ids": row["semantic_ids"],
         })
-        
-    df = pd.DataFrame(lsit)
-    df.to_csv("./dataset/ml1m/ml1m.semanticids", index=False)
+
+    out_df = pd.DataFrame(rows)
+    out_df.to_csv(output_path, index=False)
+    print(
+        f"Wrote {len(out_df)} rows to {output_path} (skipped {skipped} missing links)."
+    )
     
 
 def read_pd(build_tokenized=False):
@@ -158,64 +87,10 @@ def read_pd(build_tokenized=False):
             print("batch preview:", batch)
         except Exception as exc:
             print("batch: <error>", repr(exc))
-            
-            
-            
-            
-            
-            
-            
-            
-
-def convert_KGGLM_to_SPRIG_paths():
-    print("Converting KGGLM paths to SPRIG paths...")
-    
-    # Load your source paths
-    try:
-        with open("./paths/OLD/KGGLM - pre - ml-1m small official_pretrain_paths_(5, 5).pkl", "rb") as f:
-            kgglm_paths = pickle.load(f)
-        print(f"KGGLM paths loaded. Found {len(kgglm_paths)} paths.")
-    except FileNotFoundError:
-        print("Error: Source pkl file not found.")
-        return
-
-    # Assuming test_sem_id_files() returns a dict or mapping if needed later
-    # For now, we use the explicit mapping provided: I109 -> [SEM12, SEM54, SEM64]
-    target_mapping = test_sem_id_files()  # Load semantic IDs if needed for mapping
-    
-    sprig_paths = []
-    errors = 0
-    
-    for path in tqdm(kgglm_paths, desc=f"Converting paths {errors}"):
-        new_path = ""
-        for token in path.split(" "):
-            # Check if token needs conversion
-            if token.startswith("I"):
-                sem = target_mapping.get(int(token[1:]), [])
-                if sem:
-                    new_path += " " + " ".join(f"SEM{sem_id}" for sem_id in sem)
-                else:
-                    new_path += " " + token  # If no mapping, keep original
-                    errors += 1
-            else:
-                new_path += " " + token
-        
-        sprig_paths.append(new_path[1:])
-
-    # Preview the conversion (using your example data logic)
-    print("\nSample Conversion:")
-    print(f"Original: {kgglm_paths[32] if kgglm_paths else 'N/A'}")
-    print(f"Converted: {sprig_paths[32] if sprig_paths else 'N/A'}")
-
-    print(f"Conversion completed with {errors} unmapped tokens.")
-    # Save the result
-    with open("./paths/SPRIG-ml-1m.pkl", "wb") as f:
-        pickle.dump(sprig_paths, f)
-    print("Conversion complete and saved.")
 
 def main():
-    # Set build_tokenized=True only if you want to force path generation/tokenization.
-    convert_KGGLM_to_SPRIG_paths()
+    fix_semanticids_item_ids()
+
 if __name__ == "__main__":
     main()
 
