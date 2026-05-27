@@ -1,0 +1,70 @@
+ecBole doesn't have a native cold-start split, but it supports pre-split files via benchmark_filename. Here's how to design the pipeline:
+
+The core idea:
+
+train.inter — only warm item interactions (≥ threshold)
+valid.inter — warm item holdout for early stopping
+test.inter — cold item interactions only (model never saw these items as positives during training, but KGAT can still embed them via KG)
+Step 1 — preprocessing script:
+
+
+import pandas as pd
+
+DATASET = "ml-1m"
+COLD_THRESHOLD = 5  # items with fewer interactions are "cold"
+
+df = pd.read_csv(f"dataset/{DATASET}/{DATASET}.inter", sep="\t")
+# columns: user_id:token  item_id:token  rating:float  timestamp:float
+
+item_counts = df["item_id:token"].value_counts()
+warm_items = item_counts[item_counts >= COLD_THRESHOLD].index
+cold_items  = item_counts[item_counts <  COLD_THRESHOLD].index
+
+warm_df = df[df["item_id:token"].isin(warm_items)].sort_values("timestamp:float")
+cold_df  = df[df["item_id:token"].isin(cold_items)]
+
+# Filter users: keep only users present in warm data (≥5 interactions)
+warm_user_counts = warm_df["user_id:token"].value_counts()
+warm_users = warm_user_counts[warm_user_counts >= 5].index
+warm_df = warm_df[warm_df["user_id:token"].isin(warm_users)]
+cold_df  = cold_df[cold_df["user_id:token"].isin(warm_users)]
+
+# Split warm into train / valid (last interaction per user → valid)
+valid_df = warm_df.groupby("user_id:token").tail(1)
+train_df = warm_df.drop(valid_df.index)
+
+header = "\t".join(df.columns)
+
+for name, split in [("train", train_df), ("valid", valid_df), ("test", cold_df)]:
+    split.to_csv(
+        f"dataset/{DATASET}/{DATASET}.{name}.inter",
+        sep="\t", index=False,
+    )
+Step 2 — KGAT config:
+
+
+# KGAT.yaml additions
+benchmark_filename: ['train', 'valid', 'test']
+
+# Disable RecBole's own filtering — the script already handled it
+user_inter_num_interval: "[0,inf)"
+item_inter_num_interval: "[0,inf)"
+
+# Keep KG loading — this is what gives cold items their embeddings
+load_col:
+    inter: ['user_id', 'item_id', 'rating', 'timestamp']
+    kg:   ['head_id', 'relation_id', 'tail_id']
+    link: ['item_id', 'entity_id']
+Why this works for KGAT specifically:
+
+KGAT initialises all item embeddings through KG entity propagation, including the .link file. Cold items that have KG connections (genre, actor, etc.) but few interactions still get meaningful embeddings from graph attention over the KG — they just never appeared as training positives. The test then directly measures whether those KG-derived embeddings are good enough to rank cold items correctly.
+
+The one thing to verify before running:
+
+Check that cold items actually appear in the .link file (item–entity mapping). Items with no KG connections AND no interactions would get random embeddings and are not useful test targets.
+
+
+link_df = pd.read_csv(f"dataset/{DATASET}/{DATASET}.link", sep="\t")
+cold_with_kg = cold_items[cold_items.isin(link_df["item_id:token"])]
+print(f"Cold items: {len(cold_items)}, with KG coverage: {len(cold_with_kg)}")
+If coverage is low, the cold-start experiment won't be meaningful.

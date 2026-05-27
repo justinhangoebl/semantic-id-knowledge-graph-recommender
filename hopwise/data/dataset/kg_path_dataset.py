@@ -178,7 +178,7 @@ class KnowledgePathDataset(KnowledgeBasedDataset):
         token_vocab = self.tokenizer.get_vocab()
         graph = self._create_ckg_igraph(show_relation=True, directed=False)
         vertex_metadata, edge_metadata = graph.to_dict_list()
-
+        
         def igraph_id_to_tokenizer_id(igraph_head, igraph_relation, igraph_tail):
             ret = []
             triple = [igraph_head, igraph_relation, igraph_tail]
@@ -207,11 +207,15 @@ class KnowledgePathDataset(KnowledgeBasedDataset):
             return ret
 
         tokenized_kg = {}
+        skipped_edges = 0
         for edge in edge_metadata:
             head = edge["source"]
             tail = edge["target"]
             relation = edge["type"]
             relation_id = self.field2token_id[self.relation_field][relation]
+            if head is None or tail is None:
+                skipped_edges += 1
+                continue
 
             head_token, relation_token, tail_token = igraph_id_to_tokenizer_id(head, relation_id, tail)
 
@@ -234,6 +238,29 @@ class KnowledgePathDataset(KnowledgeBasedDataset):
 
             tokenized_kg[tail_token][relation_token].add(head_token)
 
+        if skipped_edges > 0:
+            self.logger.warning(
+                "SPRIG tokenized CKG: skipped %d edges due to missing semantic mapping.",
+                skipped_edges,
+            )
+        edge_count = sum(
+            len(tails) for rels in tokenized_kg.values() for tails in rels.values()
+        )
+        self.logger.info(
+            "Tokenized CKG summary: nodes=%d, edges=%d, graph_edges=%d, items=%d, users=%d, entities=%d",
+            len(tokenized_kg),
+            edge_count,
+            graph.ecount(),
+            self.item_num,
+            self.user_num,
+            self.entity_num,
+        )
+        if tokenized_kg:
+            sample_heads = list(tokenized_kg.keys())[:5]
+            self.logger.debug(
+                "Tokenized CKG sample heads (token ids): %s",
+                sample_heads,
+            )
         return tokenized_kg
 
     def tokenize(self, data):
@@ -250,7 +277,14 @@ class KnowledgePathDataset(KnowledgeBasedDataset):
         """Tokenize the path dataset."""
 
         if self._tokenized_dataset is None:
-            tokenized_dataset = self.tokenize(self.path_dataset.split("\n"))
+            path_rows = [path for path in self.path_dataset.splitlines() if path.strip()]
+            if not path_rows:
+                raise ValueError(
+                    "Path dataset is empty — no valid paths were generated. "
+                    "Check path_sample_args (strategy, restrict_by_phase, temporal_causality) "
+                    "and that the KG has entity connections between items."
+                )
+            tokenized_dataset = self.tokenize(path_rows)
             tokenized_dataset = Interaction(tokenized_dataset.data)
             correct_path_mask = [
                 all(spec_token not in path[1:-1] for spec_token in self.tokenizer.all_special_ids)
@@ -687,21 +721,31 @@ class KnowledgePathDataset(KnowledgeBasedDataset):
         return path_string
 
     def _add_paths_relations(self, graph, paths):
-        n_paths = len(paths)
-        paths_array = np.full((n_paths, self.path_hop_length + 1), fill_value=self.PATH_PADDING, dtype=int)
-        for i, path in enumerate(paths):
-            paths_array[i, : len(path)] = path
+        relation_token_id = self.field2token_id[self.relation_field]
+        edge_rel: dict = {}
+        for edge in graph.es:
+            rid = relation_token_id[edge["type"]]
+            edge_rel[(edge.source, edge.target)] = rid
+            if not graph.is_directed():
+                edge_rel[(edge.target, edge.source)] = rid
 
+        n_paths = len(paths)
         complete_path_length = self.path_hop_length * 2 + 1
         paths_with_relations = np.full((n_paths, complete_path_length), fill_value=self.PATH_PADDING, dtype=int)
-        relation_token_id = self.field2token_id[self.relation_field]
-        relation_map = np.zeros((len(graph.vs), len(graph.vs)), dtype=int)
-        for edge in graph.es:
-            relation_map[edge.source, edge.target] = relation_token_id[edge["type"]]
-            if not graph.is_directed():
-                relation_map[edge.target, edge.source] = relation_token_id[edge["type"]]
 
-        _add_paths_relations_parallel(paths_array, paths_with_relations, relation_map)
+        for i, path in enumerate(paths):
+            nodes = path if isinstance(path, (list, tuple)) else path.tolist()
+            pos = 0
+            for j, node in enumerate(nodes):
+                if pos >= complete_path_length:
+                    break
+                paths_with_relations[i, pos] = node
+                pos += 1
+                if j + 1 < len(nodes) and pos < complete_path_length:
+                    paths_with_relations[i, pos] = edge_rel.get(
+                        (int(node), int(nodes[j + 1])), self.PATH_PADDING
+                    )
+                    pos += 1
 
         return paths_with_relations
 
@@ -741,84 +785,86 @@ def _generate_user_paths_constrained_random_walk_per_user(graph, used_ids, iid_f
     restrict_by_phase = kwargs.pop("restrict_by_phase", None)
     collaborative_path = kwargs.pop("collaborative_path", None)
 
-    def process_user(u):
-        user_paths = set()
+    # Pre-compute typed adjacency in CSR format once in the main process.
+    # Threads then do only numpy index lookups — no igraph calls — which is
+    # safe for concurrent access. Building here (single-threaded) avoids any
+    # igraph thread-safety concerns.
+    _node_types = graph.vs["type"]
+    _n = len(graph.vs)
 
+    def _build_csr(predicate):
+        ptrs = np.zeros(_n + 1, dtype=np.int64)
+        rows = []
+        for v in range(_n):
+            nbs = [nb for nb in graph.neighbors(v) if predicate(nb) and nb != v]
+            ptrs[v + 1] = ptrs[v] + len(nbs)
+            rows.extend(nbs)
+        return np.array(rows, dtype=np.int32), ptrs
+
+    _adj_final_data, _adj_final_ptr = _build_csr(lambda nb: _node_types[nb] == iid_field)
+    if collaborative_path:
+        _adj_mid_data, _adj_mid_ptr = _build_csr(lambda nb: _node_types[nb] != iid_field)
+    else:
+        _adj_mid_data, _adj_mid_ptr = _build_csr(lambda nb: _node_types[nb] == entity_field)
+
+    def _graph_traversal(path, hop, collected, candidates_set=None):
+        last = path[-1]
+        if hop == 1:
+            final_slice = _adj_final_data[_adj_final_ptr[last]:_adj_final_ptr[last + 1]]
+            if candidates_set is not None:
+                next_node_candidates = [nb for nb in final_slice if nb in candidates_set]
+            else:
+                next_node_candidates = final_slice
+        else:
+            next_node_candidates = _adj_mid_data[_adj_mid_ptr[last]:_adj_mid_ptr[last + 1]]
+
+        next_nodes = np.random.choice(
+            next_node_candidates, min(len(next_node_candidates), paths_per_hop), replace=False
+        )
+        for node in next_nodes:
+            new_path = (*path, node)
+            if hop == 1:
+                collected.add(new_path)
+            else:
+                _graph_traversal(new_path, hop - 1, collected, candidates_set)
+
+            if len(collected) == max_paths_per_user:
+                return
+
+    def process_user(u):
         pos_iid = np.array(list(used_ids[u]))
         if temporal_matrix is not None:
             pos_iid = pos_iid[np.argsort(temporal_matrix[u, pos_iid])]
 
-        # reindex item ids according to the igraph
         pos_iid += user_num
 
-        user_path_sample_size = 0
+        user_paths = set()
         user_invalid_paths = max_consecutive_invalid
-
-        def _graph_traversal(g, path, hop, candidates=None):
-            nonlocal user_paths
-            nonlocal user_path_sample_size
-            nonlocal user_invalid_paths
-
-            if hop == 1 and candidates is not None:
-                next_node_candidates = g.es.select(_source=path[-1], _target=candidates)
-                next_node_candidates = list(
-                    set(e.source if e.source_vertex != path[-1] else e.target for e in next_node_candidates)
-                )
-            else:
-
-                def _check_next_candidate(node):
-                    if hop == 1:
-                        type_check = g.vs[node]["type"] == iid_field
-                    elif collaborative_path:
-                        type_check = g.vs[node]["type"] != iid_field
-                    else:
-                        type_check = g.vs[node]["type"] == entity_field
-
-                    return type_check and node != path[-1]
-
-                next_node_candidates = [v for v in g.neighbors(path[-1]) if _check_next_candidate(v)]
-
-            next_nodes = np.random.choice(
-                next_node_candidates, min(len(next_node_candidates), paths_per_hop), replace=False
-            )
-            for node in next_nodes:
-                new_path = (*path, node)
-                if hop == 1:
-                    # Path is valid per construction
-                    user_paths.add(new_path)
-                    user_path_sample_size += 1
-                else:
-                    _graph_traversal(g, new_path, hop - 1, candidates)
-
-                if user_path_sample_size == max_paths_per_user:
-                    return
 
         while True:
             pos_iid_range = _check_temporal_causality_feasibility(temporal_matrix, pos_iid)
             if pos_iid_range is None:
                 return set()
 
-            # select new starting node
             start_node_idx = np.random.randint(pos_iid_range)
             start_node = pos_iid[start_node_idx]
 
             if restrict_by_phase:
                 if temporal_matrix is not None:
-                    item_candidates = pos_iid[start_node_idx + 1 :]
+                    item_candidates = set(pos_iid[start_node_idx + 1 :].tolist())
                 else:
-                    item_candidates = np.concatenate([pos_iid[:start_node_idx], pos_iid[start_node_idx + 1 :]])
+                    item_candidates = set(np.concatenate([pos_iid[:start_node_idx], pos_iid[start_node_idx + 1 :]]).tolist())
             else:
                 item_candidates = None
 
-            # First hop is the relation user-item already addressed
-            curr_path_sample_size = user_path_sample_size
-            _graph_traversal(graph, (u, start_node), path_hop_length, item_candidates)
-            if user_path_sample_size - curr_path_sample_size == 0:
-                user_invalid_paths -= paths_per_hop
+            prev_size = len(user_paths)
+            _graph_traversal((u, start_node), path_hop_length, user_paths, item_candidates)
+            if len(user_paths) == prev_size:
+                user_invalid_paths -= 1
             else:
                 user_invalid_paths = max_consecutive_invalid
 
-            if user_path_sample_size == max_paths_per_user or user_invalid_paths <= 0:
+            if len(user_paths) >= max_paths_per_user or user_invalid_paths <= 0:
                 break
 
         return user_paths
@@ -853,6 +899,8 @@ def _generate_user_paths_weighted_random_walk_per_user(graph, used_ids, iid_fiel
         user_path_sample_size = 0
         user_invalid_paths = max_consecutive_invalid
         while True:
+            start_node_idx = -1
+            start_node = None
             if iid_tries == 0:
                 iid_tries = max_tries_per_iid
 
@@ -866,12 +914,14 @@ def _generate_user_paths_weighted_random_walk_per_user(graph, used_ids, iid_fiel
 
             if restrict_by_phase:
                 if temporal_matrix is not None:
-                    item_candidates = pos_iid[start_node_idx + 1 :]
+                    item_candidates = set(pos_iid[start_node_idx + 1 :].tolist())
                 else:
-                    item_candidates = np.concatenate([pos_iid[:start_node_idx], pos_iid[start_node_idx + 1 :]])
+                    item_candidates = set(np.concatenate([pos_iid[:start_node_idx], pos_iid[start_node_idx + 1 :]]).tolist())
             else:
                 item_candidates = None
 
+            valid_path = False
+            full_path = (None, None)
             while iid_tries > 0:
                 # First hop is the relation user-item already addressed
                 generated_path = graph.random_walk(start_node, path_hop_length, weights="weight")
@@ -933,6 +983,27 @@ def _generate_user_paths_all_simple_per_user_and_positive(graph, used_ids, **kwa
     max_paths_per_user = kwargs.pop("max_paths_per_user", None)
     collaborative_path = kwargs.pop("collaborative_path", None)
 
+    # Pre-compute vertex type lookup arrays once — avoids np.array() creation
+    # per path and repeated bound arithmetic inside the hot loop.
+    graph_min_iid = 1 + user_num
+    graph_max_iid = item_num - 1 + user_num
+    _n = len(graph.vs)
+    _is_item = np.zeros(_n, dtype=bool)
+    _is_item[graph_min_iid : graph_max_iid + 1] = True
+
+    def _is_valid(path):
+        if path[0] >= graph_min_iid:          # must start with user
+            return False
+        if not _is_item[path[1]]:              # 2nd node must be item
+            return False
+        if not _is_item[path[-1]]:             # last node must be item
+            return False
+        if not collaborative_path:
+            for v in path[2:-1]:               # no user nodes in the middle
+                if v < graph_min_iid:
+                    return False
+        return True
+
     def process_user(u):
         user_paths = set()
 
@@ -940,28 +1011,26 @@ def _generate_user_paths_all_simple_per_user_and_positive(graph, used_ids, **kwa
         if temporal_matrix is not None:
             pos_iid = pos_iid[np.argsort(temporal_matrix[u, pos_iid])]
 
-        # reindex item ids according to the igraph
         pos_iid += user_num
 
         for target_item in pos_iid:
             user_path_sample_size = 0
 
-            # First hop is the relation user-item already addressed
             generated_paths = graph.get_all_simple_paths(u, to=target_item, cutoff=path_hop_length + 1, mode="all")
-
             random.shuffle(generated_paths)
-            # U R I R I R I
-            for full_path in generated_paths:
-                valid_path = KnowledgePathDataset._check_kg_path(
-                    full_path, user_num, item_num, check_last_node=True, collaborative_path=collaborative_path
-                )
 
-                if valid_path not in user_paths:
-                    user_paths.add(tuple(full_path))
-                    user_path_sample_size += 1
+            for full_path in generated_paths:
+                if _is_valid(full_path):
+                    path_tuple = tuple(full_path)
+                    if path_tuple not in user_paths:
+                        user_paths.add(path_tuple)
+                        user_path_sample_size += 1
 
                 if user_path_sample_size == max_paths_per_user:
                     break
+
+            if len(user_paths) >= max_paths_per_user:
+                break
 
         return user_paths
 
@@ -1009,9 +1078,9 @@ def _generate_user_paths_all_simple_per_user(graph, used_ids, **kwargs):
 
             if restrict_by_phase:
                 if temporal_matrix is not None:
-                    item_candidates = pos_iid[start_node_idx + 1 :]
+                    item_candidates = set(pos_iid[start_node_idx + 1 :].tolist())
                 else:
-                    item_candidates = np.concatenate([pos_iid[:start_node_idx], pos_iid[start_node_idx + 1 :]])
+                    item_candidates = set(np.concatenate([pos_iid[:start_node_idx], pos_iid[start_node_idx + 1 :]]).tolist())
             else:
                 item_candidates = np.concatenate([all_items[:start_node], all_items[start_node + 1 :]])
 

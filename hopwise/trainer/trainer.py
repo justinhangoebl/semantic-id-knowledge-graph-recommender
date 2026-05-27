@@ -1132,7 +1132,12 @@ class PretrainTrainer(Trainer):
         epoch_label = str(epoch_label) if epoch_label is not None else "pretrained"
         return os.path.join(
             self.checkpoint_dir,
-            "{}-{}-{}.pth".format(self.config["model"], self.config["dataset"], epoch_label),
+            "{}-{}-{}-{}.pth".format(
+                self.config["model"],
+                self.config["dataset"],
+                epoch_label,
+                get_local_time(),
+            ),
         )
 
     def pretrain(self, train_data, verbose=True, show_progress=False):
@@ -2148,7 +2153,7 @@ class KGGLMTrainer(HFPathLanguageModelingTrainer, PretrainTrainer):
         return os.path.join(
             self.checkpoint_dir,
             self.HUGGINGFACE_SAVE_PATH_SUFFIX
-            + "{}-{}-{}.pth".format(self.config["model"], self.config["dataset"], epoch_label),
+            + "{}-{}-{}-{}.pth".format(self.config["model"], self.config["dataset"], epoch_label, get_local_time()),
         )
 
     def pretrain(self, train_data, verbose=True, show_progress=False):
@@ -2183,6 +2188,7 @@ class KGGLMTrainer(HFPathLanguageModelingTrainer, PretrainTrainer):
         )
 
         self.hf_trainer.train()
+        self.hf_trainer.save_model()
 
         return self.best_valid_score, self.best_valid_result
 
@@ -2212,3 +2218,10 @@ class KGGLMTrainer(HFPathLanguageModelingTrainer, PretrainTrainer):
             return super().fit(train_data, valid_data, verbose, saved, show_progress, callback_fn)
         else:
             raise ValueError(f"Please make sure that the 'train_stage' is in [{self.model.TRAIN_STAGES}]!")
+
+class SPRIGTrainer(KGGLMTrainer):
+    r"""SPRIGTrainer is designed for SPRIG, which is a path-based language model for knowledge-aware recommendation.
+    It includes two training stages: semantic id prediction pre-training and recommendation path generation fine-tuning.
+    """
+
+    pass
