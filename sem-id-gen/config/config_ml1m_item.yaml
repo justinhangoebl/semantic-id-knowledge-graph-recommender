@@ -1,0 +1,26 @@
+data:
+  dataset: "movielens"
+  batch_size: 128
+  normalize_data: False
+  category: "1m"
+  embedding_dimension: "item"
+
+model:
+  hidden_dimensions: [768, 384, 192]
+  latent_dimension: 512
+  num_codebook_layers: 3
+  codebook_clusters: 256
+  commitment_weight: 0.29143589333279596
+
+train:
+  learning_rate: 0.0005485693958532249
+  weight_decay: 0.0
+  num_epochs: 1024
+  warmup_epochs: 70
+  validation_step: 10
+
+general:
+  seed: 2026
+  use_wandb: True
+  wandb_project: "semantic_id_ml_1m_item"
+  wandb_entity: "justin-hangoebl-master-thesis"

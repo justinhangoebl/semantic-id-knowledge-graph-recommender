@@ -41,6 +41,9 @@ class KGGLMDataset(KnowledgePathDataset):
             graph = self._create_ckg_igraph(show_relation=True, directed=False)
             kg_rel_num = len(self.relations)
             graph.es["weight"] = [0.0] * (self.inter_num) + [1.0] * kg_rel_num
+            walk_graph = graph.subgraph_edges(
+                graph.es.select(weight_eq=1.0), delete_vertices=False
+            )
 
             graph_min_iid = 1 + self.user_num
             min_hop, max_hop = self.pretrain_hop_length
@@ -55,7 +58,7 @@ class KGGLMDataset(KnowledgePathDataset):
             max_tries_per_entity = self.config["path_sample_args"]["MAX_RW_TRIES_PER_IID"]
 
             kwargs = dict(
-                graph=graph,
+                graph=walk_graph,
                 min_hop=min_hop,
                 max_hop=max_hop,
                 pretrain_paths=self.pretrain_paths,
@@ -91,26 +94,25 @@ def _generate_paths_random_walks(start_node, **kwargs):
     pretrain_paths = kwargs.get("pretrain_paths")
     max_tries_per_entity = kwargs.get("max_tries_per_entity")
     paths = kwargs.get("paths")
-    
-    # Use local set for faster duplicate checking per entity
-    local_paths = set()
-    
-    for _ in range(pretrain_paths):
-        path_hop_length = np.random.randint(min_hop, max_hop + 1)
-        tries_per_entity = max_tries_per_entity
 
-        while tries_per_entity > 0:
-            generated_path = graph.random_walk(start_node, path_hop_length, weights="weight")
-            generated_path = tuple(generated_path)
-            # Check local set first (much faster), then global
-            if generated_path not in local_paths:
-                local_paths.add(generated_path)
+    # Local rebinds: cheaper attribute/global lookups in the hot loop.
+    rw = graph.random_walk
+
+    # Vectorize hop-length sampling instead of one randint() per path.
+    hop_lengths = np.random.randint(min_hop, max_hop + 1, size=pretrain_paths)
+
+    local_paths = set()
+    local_add = local_paths.add
+    local_contains = local_paths.__contains__
+
+    for path_hop_length in hop_lengths:
+        hop = int(path_hop_length)
+        for _ in range(max_tries_per_entity):
+            # No `weights=` -> igraph picks a uniform neighbor in C, fast path.
+            generated_path = tuple(rw(start_node, hop))
+            if not local_contains(generated_path):
+                local_add(generated_path)
                 break
-            tries_per_entity -= 1
-        else:
-            # If we exhausted tries, add the last path anyway
-            if generated_path:
-                local_paths.add(generated_path)
-    
-    # Add all local paths to global set at once (thread-safe with GIL)
+
+    # set.update is atomic under the GIL, so this is safe with prefer="threads".
     paths.update(local_paths)

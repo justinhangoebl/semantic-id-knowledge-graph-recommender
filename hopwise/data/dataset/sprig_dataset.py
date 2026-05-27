@@ -60,11 +60,12 @@ class SPRIGDataset(KnowledgePathDataset):
 
         self.logger.info(
             "SPRIGDataset ready: train_stage=%s, N=%d, K=%d SEM types, "
-            "%d items with semantic IDs.",
+            "%d / %d filtered items covered by semantic IDs.",
             self.train_stage,
             self.semantic_ids_per_item,
             self.semantic_vocab.num_semantic_tokens(),
-            len(self._raw_semantic_mapping),
+            len(self.semantic_vocab),
+            self.item_num - 1,
         )
 
     # ------------------------------------------------------------------
@@ -87,19 +88,22 @@ class SPRIGDataset(KnowledgePathDataset):
 
 
         if self.train_stage == "finetune":
-            self.token_sequence_length = 3 + self.path_hop_length * (self.semantic_ids_per_item + 1)
+            # Exact length: BOS + U + H*(R + 1 intermediate token) + 2*N SEM tokens + EOS
+            # = 2*H + 2*N + 1  (intermediate nodes are always 1 token — entity or user)
+            self.token_sequence_length = 2 * self.path_hop_length + 2 * self.semantic_ids_per_item + 1
         else:
             self.token_sequence_length = 2 + self.pretrain_hop_length[1] * (self.semantic_ids_per_item + 2)
 
-        if self.token_sequence_length > self.context_length:
-            self.logger.warning(
-                "SPRIG: computed token_sequence_length (%d) > config context_length (%d). "
-                "Overriding. Set context_length >= %d to suppress this warning.",
+        # Always clamp context_length to the exact computed length so the tokenizer
+        # does not pad paths shorter than context_length.  Padding tokens inside
+        # path[1:-1] cause tokenize_path_dataset to discard every path.
+        if self.context_length != self.token_sequence_length:
+            self.logger.info(
+                "SPRIG: setting context_length to exact token_sequence_length %d (was %d).",
                 self.token_sequence_length,
                 self.context_length,
-                self.token_sequence_length,
             )
-            self.context_length = self.token_sequence_length
+        self.context_length = self.token_sequence_length
 
     def _load_data(self, token, dataset_path):
         super()._load_data(token, dataset_path)
@@ -112,10 +116,7 @@ class SPRIGDataset(KnowledgePathDataset):
     # ------------------------------------------------------------------
 
     def _load_semantic_id_mapping(self, filepath: str) -> dict[int, list[int]]:
-        """Load ``filepath`` → ``{item_id: [code_0, …, code_{N-1}]}``.
-
-        Raises on every error condition — no silent fallbacks.
-        """
+        """Load ``filepath`` ... ``{item_id: [code_0, …, code_{N-1}]}``."""
         if not os.path.isfile(filepath):
             raise FileNotFoundError(
                 f"Semantic IDs file not found: {filepath}\n"
@@ -138,16 +139,25 @@ class SPRIGDataset(KnowledgePathDataset):
                 + (" …" if len(bad) > 10 else "")
             )
 
-        # No two items may share the same code tuple (would break reverse map).
+        # Check for items sharing the same code tuple (collision in the reverse map).
+        # Collisions mean the second item in a pair becomes unreachable during generation;
+        # we warn and continue with last-wins semantics rather than aborting.
         seen: dict[tuple, int] = {}
+        duplicate = []
         for iid, codes in mapping.items():
             key = tuple(codes)
             if key in seen:
-                raise ValueError(
-                    f"Semantic ID collision: items {seen[key]} and {iid} share codes {key}. "
-                    "Re-generate your .semanticids file."
-                )
+                duplicate.append((seen[key], iid))
             seen[key] = iid
+
+        if duplicate:
+            self.logger.warning(
+                "SPRIG: %d semantic ID collision(s) found in %s. "
+                "Colliding items are unreachable during generation (last-wins). "
+                "Re-run semantic ID assignment to eliminate collisions.",
+                len(duplicate),
+                filepath,
+            )
         return mapping
 
     # ------------------------------------------------------------------
@@ -214,10 +224,28 @@ class SPRIGDataset(KnowledgePathDataset):
             mask_token=self.mask_token,
         )
 
+        # Translate raw mapping (keyed by original item token, e.g. movie ID "1193")
+        # to internal RecBole item indices so all downstream lookups use a consistent
+        # ID space.  field2token_id[iid_field] maps original token string → internal idx.
+        item_token2id: dict = self.field2token_id[self.iid_field]
+        self._internal_semantic_mapping: dict[int, list[int]] = {}
+        for orig_id, codes in self._raw_semantic_mapping.items():
+            internal_id = item_token2id.get(str(orig_id))
+            if internal_id is not None:
+                self._internal_semantic_mapping[int(internal_id)] = codes
+
+        n_covered = len(self._internal_semantic_mapping)
+        n_items = self.item_num - 1  # item_num includes [PAD] at index 0
+        self.logger.info(
+            "SPRIG semantic ID coverage: %d / %d filtered items have semantic IDs "
+            "(%d items in file had no match after filtering).",
+            n_covered, n_items, n_items - n_covered,
+        )
+
         # SemanticVocab is built once here; every component that needs it
         # gets it through dataset.semantic_vocab.
         self.semantic_vocab = SemanticVocab(
-            self._raw_semantic_mapping,
+            self._internal_semantic_mapping,
             self._tokenizer,
             self.semantic_ids_per_item,
         )
@@ -251,10 +279,10 @@ class SPRIGDataset(KnowledgePathDataset):
                 )
             elif n <= graph_max_iid:
                 # Item vertex — expand to N SEM tokens.
-                item_id = n - self.user_num
-                if item_id not in self._raw_semantic_mapping:
+                item_id = n - self.user_num  # internal RecBole index
+                if item_id not in self._internal_semantic_mapping:
                     return None  # path contains unmapped item — drop it
-                codes = self._raw_semantic_mapping[item_id]
+                codes = self._internal_semantic_mapping[item_id]
                 node_token_lists.append(
                     [PathLanguageModelingTokenType.SEMANTIC.token + str(c) for c in codes]
                 )
@@ -312,26 +340,7 @@ class SPRIGDataset(KnowledgePathDataset):
         """Generate (or load from cache) pretrain paths and format them."""
         if self._path_dataset is not None:
             return
-
-        wandb_proj = getattr(self.config, "wandb_proj", "SPRIG_default")
-        cache_file = (
-            f"./paths/{wandb_proj}_sprig_pretrain_raw_{self.pretrain_hop_length}.pkl"
-        )
-
-        if os.path.exists(cache_file):
-            self.logger.info(
-                "Loading cached SPRIG pretrain raw paths from %s …", cache_file
-            )
-            with open(cache_file, "rb") as fh:
-                raw_paths = pickle.load(fh)  # list of numpy path arrays
-        else:
-            raw_paths = self._sample_pretrain_paths()
-            os.makedirs(os.path.dirname(os.path.abspath(cache_file)), exist_ok=True)
-            with open(cache_file, "wb") as fh:
-                pickle.dump(raw_paths, fh)
-            self.logger.info(
-                "Cached %d pretrain raw paths to %s.", len(raw_paths), cache_file
-            )
+        raw_paths = self._sample_pretrain_paths()
 
         lines: list[str] = []
         skipped = 0
@@ -436,19 +445,26 @@ class SPRIGDataset(KnowledgePathDataset):
         graph_min_iid = self.user_num
         graph_max_iid = self.user_num + self.item_num - 1
 
-        def vertex_to_tok_tuple(v: int) -> tuple[int, ...]:
+        def vertex_to_tok_tuple(v: int) -> tuple[int, ...] | None:
             if v < graph_min_iid:
                 return (vocab[PathLanguageModelingTokenType.USER.token + str(v)],)
             elif v <= graph_max_iid:
                 item_id = v - self.user_num
-                return tuple(self.semantic_vocab.get_item_tokens(item_id))
+                try:
+                    return tuple(self.semantic_vocab.get_item_tokens(item_id))
+                except KeyError:
+                    return None
             else:
                 return (vocab[PathLanguageModelingTokenType.ENTITY.token + str(v - self.user_num)],)
 
         tokenized_kg: dict = {}
+        skipped_edges = 0
         for e in graph.es:
             head_tup = vertex_to_tok_tuple(e.source)
             tail_tup = vertex_to_tok_tuple(e.target)
+            if head_tup is None or tail_tup is None:
+                skipped_edges += 1
+                continue
             rel_id = rel_field[e["type"]]
             rel_tok = vocab[PathLanguageModelingTokenType.RELATION.token + str(rel_id)]
 
@@ -456,6 +472,12 @@ class SPRIGDataset(KnowledgePathDataset):
             for h, t in ((head_tup, tail_tup), (tail_tup, head_tup)):
                 tokenized_kg.setdefault(h, {}).setdefault(rel_tok, set()).add(t)
 
+        if skipped_edges > 0:
+            self.logger.warning(
+                "SPRIG tokenized CKG: skipped %d edges — item missing from semantic vocab "
+                "(dataset filter broader than vocab coverage).",
+                skipped_edges,
+            )
         return tokenized_kg
 
     def get_tokenized_used_ids(self) -> dict[int, set[tuple[int, ...]]]:
@@ -472,5 +494,6 @@ class SPRIGDataset(KnowledgePathDataset):
             result[u_tok] = {
                 tuple(self.semantic_vocab.get_item_tokens(int(iid)))
                 for iid in items
+                if int(iid) in self.semantic_vocab
             }
         return result

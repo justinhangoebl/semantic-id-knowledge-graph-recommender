@@ -116,6 +116,8 @@ bin/act
 # Sphinx documentation
 docs/_build/
 docs/build/
+docs/
+conversion_tools/
 
 *.zip
 *.dat

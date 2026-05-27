@@ -205,8 +205,9 @@ class HopwiseCallback(TrainerCallback):
 
         if state.global_step >= state.max_steps:
             control.should_training_stop = True
-            # Save the model at the end if we have a save strategy
-            if args.save_strategy != IntervalStrategy.NO:
+            # Only save here for step-based strategies; epoch-based strategies
+            # save in on_epoch_end, which runs after this and has the correct output_dir.
+            if args.save_strategy == IntervalStrategy.STEPS:
                 control.should_save = True
 
         return control

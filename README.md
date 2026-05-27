@@ -1,259 +1,136 @@
+# SPRIG: Semantic Path Reasoning with Interpretable Generation
 
-
-<h1 align="center">🚀 hopwise</h1>
-<p align="center">
-  <b>RecBole extension with a focus on Knowledge Graphs (KGs) and explainability.</b>
-</p>
-
-## ✨ Overview
-
-**hopwise** is an advanced extension of the RecBole library, designed to enhance recommendation systems with the power of **knowledge graphs**.
-By integrating **knowledge embedding models**, **path-based reasoning methods**, and **path language modeling approaches**, hopwise supports both **recommendation** and **link prediction** tasks with a focus on **explainability**.
+This repository contains the implementation of **SPRIG**, a knowledge-graph-based recommender system that replaces raw item identifiers with learned semantic codes, enabling compositional generalization over items through shared representation structure. The codebase is a fork of [hopwise](https://github.com/tail-unica/hopwise), an open-source library for explainable path-reasoning recommendation over knowledge graphs.
 
 ---
 
-![hopwise pipeline](https://github.com/tail-unica/hopwise/blob/main/assets/hopwise.png)
+## Overview
 
-**Our framework: <span style="color:rgb(247, 206, 204)">new functionalities</span>, <span style="color:rgb(213, 232, 212)">datasets utilities</span>, <span style="color:rgb(218, 232, 249)">abstraction layers</span>, <span style="color:rgb(255, 242, 205)">environment utils</span>, <span style="color:rgb(255, 230, 205)">metrics type</span>, <span style="color:rgb(208,206,226)">models</span>**
+Existing path language modeling methods for recommendation — such as PEARLM and KGGLM — represent items as opaque atomic tokens. While this allows an autoregressive model to generate reasoning paths through a knowledge graph, it treats each item as an isolated symbol. The model must learn item-specific predictions entirely from co-occurrence patterns, with no inductive bias toward items that share semantic properties.
 
-## 🆕 What's New?
+SPRIG addresses this by replacing item tokens with **semantic ID tuples**: short sequences of discrete codes derived from a hierarchical quantization of item embeddings (e.g., residual quantization or k-means over entity representations). An item `i` is no longer a single token `I_i` but a sequence `SEM_{c_1} SEM_{c_2} ... SEM_{c_N}`. Items that are semantically similar share code prefixes, so the model can leverage partial matches during generation — a form of compositional reasoning that atomic tokens do not afford.
 
-🆕 **Path Reasoning Models**
-- **[PLM-Rec](https://dl.acm.org/doi/10.1145/3485447.3511937)**
-- **[PEARLM](https://arxiv.org/pdf/2310.16452)**
-- **[KGGLM](https://dl.acm.org/doi/10.1145/3640457.3691703)**
-- **[PGPR](https://dl.acm.org/doi/10.1145/3331184.3331203)**
-- **[CAFE](https://dl.acm.org/doi/10.1145/3340531.3412038)**
-- **[TPRec](https://dl.acm.org/doi/10.1145/3531267)**
-
-*We also added [KGLRR](https://link.springer.com/article/10.1007/s10994-024-06646-4) although the final explanation is not based on a predicted path in a Knowledge Graph.*
-
-🆕 **Knowledge Graph Embedding Models**
-
-**📌 Translational Models**
-
-- **[TransE](https://proceedings.neurips.cc/paper_files/paper/2013/file/1cecc7a77928ca8133fa24680a88d2f9-Paper.pdf)**
-- **[TransH](https://ojs.aaai.org/index.php/AAAI/article/view/8870)**
-- **[TransD](https://aclanthology.org/P15-1067/)**
-- **[TransR](https://linyankai.github.io/publications/aaai2015_transr.pdf)**
-- **[TorusE](https://cdn.aaai.org/ojs/11538/11538-13-15066-1-2-20201228.pdf)**
-- **[RotatE](https://arxiv.org/abs/1902.10197)**
-
-**📌 Tensor/Matrix Factorization Models**
-
-
-- **[ComplEx](https://arxiv.org/abs/1606.06357)**
-- **[Analogy](https://proceedings.mlr.press/v70/liu17d/liu17d.pdf)**
-- **[TuckER](https://arxiv.org/abs/1901.09590)**
-- **[RESCAL](https://icml.cc/2011/papers/438_icmlpaper.pdf)**
-- **[DistMult](https://arxiv.org/abs/1412.6575)**
-- **[HolE](https://arxiv.org/abs/1510.04935)**
-
-**📌 Convolution-Based Models**
-
-- **[ConvE](https://arxiv.org/abs/1707.01476)**
-- **[ConvKB](https://aclanthology.org/N18-2053/)**
-
-*We relied for most of the Knowledge Graph Embeddings methods to: [TorchKGE](https://torchkge.readthedocs.io/en/latest/) due to its popularity, published at a KDD workshop in 2020.*
-
-🆕 **Explanation Path Quality Metrics**
-
-- **LIR (Linking Interaction Recency)**
-- **SEP (Shared Entity Popularity)**
-- **LID (Linking Interaction Diversity)**
-- **LITD (Linked Interaction Type Diversity)**
-- **SED (Shared Entity Diversity)**
-- **SETD (Shared Entities Type Diversity)**
-- **PTC (Path Type Concentration)**
-- **PPT (Path Pattern Type)**
-- **PTD/PPC (Path Type Diversity)**
-- **Model Fidelity**
-
-🆕 **New Datasets**
-- **MovieLens-1M Small**: used in the papers [PEARLM](https://arxiv.org/abs/2310.16452) and [KGGLM](https://dl.acm.org/doi/10.1145/3640457.3691703)
-- **Last.FM-1M Small**: used in the papers [PEARLM](https://arxiv.org/abs/2310.16452) and [KGGLM](https://dl.acm.org/doi/10.1145/3640457.3691703)
-- **Yelp 2018**: used in the paper [KGAT](https://dl.acm.org/doi/10.1145/3292500.3330989)
-- **Alibaba Fashion**: used in the paper [KGRec](https://dl.acm.org/doi/10.1145/3580305.3599400)
-
-All the datasets are available as zip archives on [Google Drive](https://drive.google.com/drive/folders/1Zv57Xfo3mC2DemQbHf5XkYKBluRALQNm?usp=drive_link).
-
-> [!IMPORTANT]
-> **Check the paper for the other changes.**
-
-## ⚡ Installation
-
-To install the project, you need to use `uv`. Follow the steps below to set up the environment and install the necessary dependencies.
-
-## 🔹 Prerequisites
-- ✅ Python **3.9**, **3.10**, or **3.11**
-- ✅ [`uv`](https://github.com/astral-sh/uv) package manager
+The path generation task is otherwise unchanged. The model takes a user token as a prefix and autoregressively generates a reasoning path through the knowledge graph, where item positions in the path are expanded to their N-token semantic representations. Recommendation candidates are extracted from the generated paths by reading off the terminal item's code tuple and looking it up in the reverse semantic vocabulary.
 
 ---
 
-### 🔹 Steps (from PyPI or from Source)
+## Method
 
+### Semantic Identifiers
 
-1️⃣ **Install **uv** and create a virtual environment.**<br>
+Each item in the dataset is assigned a tuple of integer codes $(c_1, c_2, \ldots, c_N)$ from a shared codebook of size $K$. The codes are derived offline from item embeddings — either via Residual Quantization VAE (RQ-VAE) or hierarchical k-means — and stored in a `.semanticids` file that maps item IDs to code tuples.
 
-We suggest installing **uv** as a [standalone application](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer) instead of using pip to avoid issues and let **uv** create a dedicated virtual environment.<br>
-Once installed, create the virtual environment
+The tokenizer is built from these codes. SEM tokens cover all integers $[0, K)$, and each item is tokenized as the corresponding N-token sequence. Crucially, two items that share a code prefix are represented as overlapping token sequences, so the model's residual stream naturally carries information about their shared structure.
 
-```sh
-uv venv --python PYTHON_VERSION --prompt hopwise
-```
-`PYTHON_VERSION` must be one of 3.9, 3.10, 3.11, while `--prompt hopwise` customizes the virtual environment name that appears on the shell.
+### Two-Stage Training
 
-2️⃣ **Install via PyPI**
+**Pretraining.** The model is pretrained on entity-level random walks over the knowledge graph subgraph (user-item interaction edges excluded). Starting from each entity, random paths of fixed hop length are sampled and formatted as token sequences. Item entities in these paths are expanded to their SEM tuple representation. The objective is standard causal language modeling: next-token prediction over the full sequence. This stage teaches the model the relational structure of the knowledge graph in semantic ID space.
 
-```sh
-uv pip install hopwise
-```
+**Finetuning.** The pretrained model is then finetuned on user-specific reasoning paths. Paths are sampled via constrained random walk from each user's positive training items, connecting through knowledge graph entities to reach other items. The path format is `[BOS] U_u R_{ui} SEM_{c_1}...SEM_{c_N} R_{e1} E_{e1} ... R_{eK} SEM_{c_1'}...SEM_{c_N'} [EOS]`, interleaving user, entity, relation, and semantic-item tokens. The finetuning objective is again next-token prediction, but now conditioned on user identity and grounded in actual interaction history.
 
-Some models require extra dependencies.
-In particular, language models for KG path reasoning require extra dependencies to be installed.
-You can install them by specifying the extra `pathlm` in the command line as follows:
-```sh
-uv pip install hopwise[pathlm]
-```
+### Inference
 
-Other models can be installed with a similar process. For instance, to install NNCF:
-```sh
-uv pip install hopwise[nncf]
-```
-
-Please check the [PyPI page](https://pypi.org/project/hopwise/) for the complete list of extra dependencies and the [documentation](https://hopwise.readthedocs.io/en/latest/installation.html#extra-dependencies) for more details on how to install hopwise with specific dependencies.
-
-**🎉 Done 🎉**
+At inference time, the model receives a user token as a prompt and generates beam-search completions. Each completion corresponds to a candidate reasoning path; the terminal item's SEM tuple is decoded via the reverse semantic vocabulary to retrieve the recommended item. The final ranked list is assembled from the unique items appearing across all generated paths, ordered by beam score.
 
 ---
 
-2️⃣ **Install from source: Clone the repository**
+## Relation to KGGLM and PEARLM
+
+SPRIG inherits its architecture from PEARLM (which extends KGGLM), using a GPT-2-style causal language model with the same two-stage training pipeline. The sole but consequential difference is the item representation: where KGGLM uses a single item token per item, SPRIG uses N SEM tokens. This change propagates through the tokenizer, the path formatter, the sequence length calculation, and the inference postprocessor, but leaves the training objective and path sampling logic intact. The result is a system where item similarity is encoded in the representation rather than inferred implicitly from training data.
+
+---
+
+## Repository Structure
+
+This is a fork of [hopwise](https://github.com/tail-unica/hopwise). The SPRIG-specific additions relative to the upstream repository are:
+
+- `hopwise/model/path_language_modeling_recommender/sprig.py` — SPRIG model class
+- `hopwise/model/sprig_postprocessor.py` — beam output postprocessor for SEM-tuple decoding
+- `hopwise/data/dataset/sprig_dataset.py` — dataset class with semantic ID loading, SEM tokenizer, and SEM-aware path formatting
+- `hopwise/data/semantic_vocab.py` — semantic vocabulary with forward and reverse lookup, collision handling
+- `hopwise/properties/model/SPRIG.yaml` — default configuration
+
+Everything else is inherited from hopwise without modification, including the knowledge graph datasets, path sampling strategies, evaluation pipeline, and all non-SPRIG models.
+
+---
+
+## Installation
+
+Requires Python 3.10 or 3.11 and [uv](https://github.com/astral-sh/uv).
+
 ```sh
-git clone https://github.com/tail-unica/hopwise.git
-cd hopwise
-```
-
-
-3️⃣ Install project dependencies
-
-*📌 make sure to have uv updated to the latest version*
-
-```sh
+git clone <this-repo>
+cd semantic-id-knowledge-graph-recommender
 uv sync
 ```
 
-> 📢 **Windows:** For proper DGL installation, please follow the [official DGL installation guide](https://www.dgl.ai/pages/start.html). Windows builds may encounter DLL linking issues with standard installation methods. Pre-built packages from the official source are recommended. Otherwise, using the Windows Subsystem for Linux (WSL) might be feasible as a solution.
+---
 
-**🎉 Done 🎉**
+## Reproducing Results
 
-## 🚀 Usage
-In any chosen setup, a .yaml file must be created containing the configuration to be used. An example:
-```yaml
-gpu_id: 0
-topk: [10,20,50,...]
-data_path: *your_datasets_folder*
-metrics: ['NDCG', 'MRR', 'Hit', 'Precision', 'Recall',...]
-valid_metric: ndcg@10
-eval_batch_size: 1
-epochs: 1
-eval_step: 1
+### 1. Generating Semantic IDs
+
+Semantic IDs must be generated before training. The `.semanticids` file maps each dataset item ID to a tuple of integer codes. Two generation methods are supported: RQ-VAE (preferred, produces contiguous coverage) and k-means over KG entity embeddings.
+
+The file format is a CSV with columns `item_id` and `semantic_ids`:
+
+```
+item_id,semantic_ids
+1,"[42, 17, 93]"
+2,"[42, 17, 8]"
+3,"[11, 200, 93]"
 ```
 
-### 📍 Training
+Item IDs must match the hopwise-internal item IDs for the specific dataset and filter configuration being used. If you change `user_inter_num_interval` or `item_inter_num_interval`, the semantic IDs file must be regenerated.
 
-<p align="center">
-    <a href="#readme">
-        <img alt="traintest" src="https://github.com/tail-unica/hopwise/blob/main/assets/trainpgprclip.gif">
-    </a>
-</p>
+Place the file at `dataset/<dataset_name>/<dataset_name>.semanticids`.
 
-
-Run the project with the following command:
-```sh
-hopwise train \
-    --model MODEL \
-    --dataset DATASET \
-    --config_files CONF_FILE_1.yaml CONF_FILE_2.yaml
-```
-
-Override config parameters directly from the CLI using =:
-```sh
-hopwise train --epochs=20
-```
-
-### 📍 Evaluating from Checkpoint
-<p align="center">
-    <a href="#readme">
-        <img alt="pgprevaltest" src="https://github.com/tail-unica/hopwise/blob/main/assets/pgprevaluation.gif">
-    </a>
-</p>
+### 2. Pretraining
 
 ```sh
-hopwise evaluate --dataset DATASET --model MODEL \
---config-files CONFIG_FILES --checkpoint CHECKPOINT.pth
+hopwise train --model SPRIG --dataset ml1m \
+    --config_files hopwise/properties/model/SPRIG.yaml \
+    train_stage=pretrain
 ```
 
-### 📍 Hyperparameters Tuning
-
-In addition to the configuration file, a params file with the extension *.hyper* the range of hyperparameters to be tested must also be set in this configuration
-
-```yaml
-learning_rate uniform 0.0001, 0.1
-embedding_size choice [64, 100, 200]
-```
-
-<p align="center">
-    <a href="#readme">
-        <img alt="hypertuningtest" src="https://github.com/tail-unica/hopwise/blob/main/assets/hypertuningbpr.gif">
-    </a>
-</p>
+### 3. Finetuning
 
 ```sh
-hopwise tune \
-    --params-file hopwise/properties/hyper/PARAMS_FILE.hyper \
-    --config-files CONFIG_FILE.yaml \
-    --study-name STUDY_NAME
+hopwise train --model SPRIG --dataset ml1m \
+    --config_files hopwise/properties/model/SPRIG.yaml \
+    train_stage=finetune \
+    pre_model_path=saved/<pretrained_checkpoint>/
 ```
 
-## ℹ️ Contributing
-Please let us know if you encounter a bug or have any suggestions by filing an issue.
+---
 
-We welcome all contributions from bug fixes to new features and extensions. 🚀
+## Datasets
 
-We expect all contributions discussed in the issue tracker and going through PRs. 📌
+The MovieLens-1M and Last.FM-1M datasets used in these experiments are available from the [hopwise Google Drive](https://drive.google.com/drive/folders/1Zv57Xfo3mC2DemQbHf5XkYKBluRALQNm?usp=drive_link), as distributed by the upstream hopwise project.
 
-## 📜 Cite
-If you find **hopwise** useful for your research or development, please cite with:
+---
+
+## Acknowledgements
+
+This work builds directly on [hopwise](https://github.com/tail-unica/hopwise) by Boratto et al. (CIKM 2025). If you use this codebase, please also cite the upstream library:
 
 ```bibtex
-
-@inproceedings{10.1145/3746252.3761641,
-  author = {Boratto, Ludovico and Fenu, Gianni and Marras, Mirko and Medda, Giacomo and Soccol, Alessandro},
-  title = {hopwise: A Python Library for Explainable Recommendation based on Path Reasoning over Knowledge Graphs},
-  year = {2025},
-  isbn = {9798400720406},
-  publisher = {Association for Computing Machinery},
-  address = {New York, NY, USA},
-  url = {https://doi.org/10.1145/3746252.3761641},
-  doi = {10.1145/3746252.3761641},
-  abstract = {Explainability is becoming central to the development of responsible recommender systems, especially as path reasoning over knowledge graphs saw increased adoption for extracting structured, semantic user-item connections. However, reproducible research in such field remains limited due to fragmented implementations, missing utilities, and the lack of standardized evaluation pipelines. In this paper, we propose hopwise, an open-source library that supports the full life-cycle of explainable path reasoning recommendation methods over knowledge graphs, from knowledge graph preparation to explanation path delivery and evaluation. Rather than creating a new library from scratch, hopwise builds upon the modular and widely adopted RecBole ecosystem, enriching it with more knowledge graphs, path sampling utilities, path reasoning methods, and metrics for evaluating explanation path utility, coverage, and diversity. We show the framework's utility by means of a benchmark including two knowledge graphs and several recommendation methods. Code and Data: https://github.com/tail-unica/hopwise.},
-  booktitle = {Proceedings of the 34th ACM International Conference on Information and Knowledge Management},
-  pages = {6328–6333},
-  numpages = {6},
-  keywords = {language model, path reasoning, reproducibility, transparency},
-  location = {Seoul, Republic of Korea},
-  series = {CIKM '25}
-  }
-
+@inproceedings{boratto2025hopwise,
+  author    = {Boratto, Ludovico and Fenu, Gianni and Marras, Mirko and
+               Medda, Giacomo and Soccol, Alessandro},
+  title     = {hopwise: A Python Library for Explainable Recommendation
+               based on Path Reasoning over Knowledge Graphs},
+  booktitle = {Proceedings of the 34th ACM International Conference on
+               Information and Knowledge Management},
+  series    = {CIKM '25},
+  pages     = {6328--6333},
+  year      = {2025},
+  doi       = {10.1145/3746252.3761641}
+}
 ```
 
-## The Team
-
-[Ludovico Boratto](https://www.ludovicoboratto.com/), [Gianni Fenu](https://web.unica.it/unica/it/ateneo_s07_ss01.page?contentId=SHD30371), [Mirko Marras](https://www.mirkomarras.com/), [Giacomo Medda](https://jackmedda.github.io/), [Alessandro Soccol](https://alessandrosocc.github.io)
-
-
-
+---
 
 ## License
-This project is licensed under the MIT License. See the LICENSE file for details.
 
+MIT License. See [LICENSE](LICENSE) for details.
