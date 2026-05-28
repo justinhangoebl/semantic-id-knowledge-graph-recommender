@@ -1,0 +1,12 @@
+# Cold-start override for SPRIG.
+# Use together with the main SPRIG.yaml:
+#   python -m hopwise run --model SPRIG --dataset ml1m \
+#     --config-files hopwise/properties/model/SPRIG.yaml \
+#                    hopwise/properties/model/SPRIG-coldstart.yaml
+#
+# Removes K-core filtering so cold items (few interactions) are included in
+# training and the bucketed cold-start evaluation can cover all frequency tiers.
+item_inter_num_interval: "[0,inf)"
+user_inter_num_interval: "[5,inf)"
+
+wandb_project: 'SPRIG - coldstart'

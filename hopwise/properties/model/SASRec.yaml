@@ -7,7 +7,11 @@ attn_dropout_prob: 0.5          # (float) The probability of an attention score 
 hidden_act: 'gelu'              # (str) The activation function in feed-forward layer.
 layer_norm_eps: 1e-12           # (float) A value added to the denominator for numerical stability.
 initializer_range: 0.02         # (float) The standard deviation for normal initialization.
-loss_type: 'BPR'                 # (str) The type of loss function. Range in ['BPR', 'CE']
+loss_type: 'CE'                  # (str) CE converges faster and matches full-ranking eval better than BPR.
+epochs: 300                   # (int) Early stopping handles actual cutoff; 300 is just a safe ceiling.
+stopping_step: 10             # (int) Stop after 10 non-improving epochs.
+learning_rate: 0.001          # (float) Standard SASRec LR; global default 2e-4 is too low.
+train_batch_size: 2048        # (int) 8x global default; cuts epoch time from ~33 min to ~4-5 min.
 
 
 eval_args:                      # (dict) 4 keys: group_by, order, split, and mode
@@ -16,8 +20,12 @@ eval_args:                      # (dict) 4 keys: group_by, order, split, and mod
   order: TO                     # (str) The ordering strategy ranging in ['RO', 'TO'].
   mode: full                    # (str) The evaluation mode ranging in ['full','unixxx','popxxx','labeled'].
 
+train_neg_sample_args: ~
+
 user_inter_num_interval: "[5,inf)"    # (str) User interval for filtering inter, such as [A,B] / [A,B) / (A,B) / (A,B].     [5,inf)
 item_inter_num_interval: "[5,inf)"    # (str) Item interval for filtering inter, such as [A,B] / [A,B) / (A,B) / (A,B].     [5,inf)
 
 load_col:
     inter: ['user_id', 'item_id', 'timestamp']
+
+gpu_id: '1'                         # (int) The GPU id to use. Range in [-1, 0, 1, 2, 3]. -1 means using CPU.

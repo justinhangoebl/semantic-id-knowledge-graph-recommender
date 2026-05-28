@@ -67,12 +67,12 @@ class SPRIG(PEARLM):
             persistent=False,
         )
 
-        # Label smoothing applied in both pretrain and finetune.
+        # Label smoothing is required for both pretrain and finetune.
         # KGGLM does not need this because each item has a unique token.
         # SPRIG's SEM codes are shared across items (aliasing), so the model
-        # can drive loss down in pretrain by predicting popular codes rather than
-        # learning item-specific representations. Smoothing prevents this in both stages.
-        self.loss = nn.CrossEntropyLoss()
+        # can drive loss down by predicting popular codes rather than learning
+        # item-specific representations. Smoothing prevents this collapse.
+        self.loss = nn.CrossEntropyLoss()# no this is bad label_smoothing=0.1)
         self.post_init()
 
 
