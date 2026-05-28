@@ -38,7 +38,7 @@ valid_metric_bigger: True       # (bool) Whether to take a bigger valid metric v
 numerical_features: []          # (list) Float feature fields to be embedded
 additional_feat_suffix: ~       # (list) Control loading additional atomic files.
 user_inter_num_interval: "[5,inf)"    # (str) User interval for filtering inter, such as [A,B] / [A,B) / (A,B) / (A,B].     [5,inf)
-item_inter_num_interval: "[5,inf)"    # (str) Item interval for filtering inter, such as [A,B] / [A,B) / (A,B) / (A,B].     [5,inf)
+item_inter_num_interval: "[0,inf)"    # (str) Item interval for filtering inter, such as [A,B] / [A,B) / (A,B) / (A,B].     [5,inf)
 
 # knowledge_path_base.yaml
 train_neg_sample_args:
@@ -116,9 +116,9 @@ embedding_size: 768             # (int) Size of the embeddings.
 num_heads: 12                   # (int) Number of heads in the multi-head attention.
 num_layers: 6                   # (int) Number of layers in the transformer.
 path_hop_length: 3              # (int) Number of hops for finetune constrained-rw (pretrain uses pretrain_hop_length).
-MAX_PATHS_PER_USER: 200        # (int) Maximum number of kg sampled paths per user.
+MAX_PATHS_PER_USER: 500        # (int) Maximum number of kg sampled paths per user.
 pretrain_epochs: 3              # (int) Number of epochs for pre-training.
-epochs: 2                       # (int) The number of training epochs.
+epochs: 10                       # (int) The number of training epochs.
 train_batch_size: 256           # (int) The training batch size.
 eval_batch_size: 128           # (int) The evaluation batch size.
 save_step: 50                   # (int) Number of steps to save the model during pre-training.
@@ -130,42 +130,36 @@ sequence_postprocessor: BeamSearch
 eval_args:                      # (dict) 4 keys: group_by, order, split, and mode
   split: {'RS':[0.6,0.2,0.2]}   # (dict) The splitting strategy ranging in ['RS','LS'].
   group_by: user                # (str) The grouping strategy ranging in ['user', 'none'].
-  order: TO                     # (str) The ordering strategy ranging in ['RO', 'TO'].
+  order: RO                     # (str) The ordering strategy ranging in ['RO', 'TO'].
   mode: full                    # (str) The evaluation mode ranging in ['full','unixxx','popxxx','labeled'].
 
 # SPRIG.yaml
-gpu_id: '0'                                         # (str) The id of GPU device(s).
+gpu_id: '5'                                         # (str) The id of GPU device(s).
 
 wandb_project: 'SPRIG - ml1m' # (str) The project name in W&B.            ml1m
-wandb_project: 'SPRIG - lfm' # (str) The project name in W&B.            ml1m
+#wandb_project: 'SPRIG - lfm' # (str) The project name in W&B.            ml1m
 
 train_stage: 'pretrain'                            # (str) The training stage. Range in ['pretrain', 'finetune'].
 pre_model_path: ''                                 # (str) The path of pretrained model.
 
 train_stage: 'finetune'                            # (str) The training stage. Range in ['pretrain', 'finetune'].
 pre_model_path: './saved/huggingface-distilgpt2-SPRIG-ml1m-pretrained-3-May-25-2026_11-19-37.pth/checkpoint-80592/'      # (str) The path of pretrained model. ml1m
-pre_model_path: './saved/huggingface-distilgpt2-SPRIG-lfm-pretrained-3-May-26-2026_02-57-20.pth/checkpoint-131283/'      # (str) The path of pretrained model. ml1m
+#pre_model_path: './saved/huggingface-distilgpt2-SPRIG-lfm-pretrained-3-May-27-2026_02-07-00.pth/checkpoint-131283/'      # (str) The path of pretrained model. ml1m
 
-
-#learning_rate: 2e-4             # (float) Learning rate for optimizer.                      ml-1m
-#weight_decay: 0.01              # (float) Weight decay for optimizer.                       ml-1m
-#warmup_steps: 250               # (int) Number of warmup steps for learning rate scheduler. ml-1m
-
-learning_rate: 2e-6             # (float) Learning rate for optimizer.                      lfm
+learning_rate: 1e-6             # (float) Learning rate for optimizer.                      lfm
 weight_decay: 0.01              # (float) Weight decay for optimizer.                       lfm
 warmup_steps: 500               # (int) Number of warmup steps for learning rate scheduler. lfm
 
-quantization_method: rkmeans-musicnn
+quantization_method: rkmeans
 semantic_ids_per_item: 3
-semantic_vocab_size: 256
 use_kg_token_types: False
 clip_grad_norm: 
     max_norm: 1.0                # (float) Maximum norm for gradient clipping.
 learner: adamW                  # (str) The name of used optimizer.
 
 path_generation_args:
-    paths_per_user: 30          # (int) Number of paths generated per user.
-    num_beams: 40               # (int) Number of beams for beam search.
+    paths_per_user: 30         # (int) Number of paths generated per user.
+    num_beams: 50               # (int) Number of beams for beam search.
     num_beam_groups: 5          # (int) Number of groups for diverse beam search.
     diversity_penalty: 0.3      # (float) Diversity penalty for beam search.
     length_penalty: 0.0         # (float) Length penalty for beam search.
@@ -180,12 +174,12 @@ path_sample_args:
 
     # finetune only
     temporal_causality: False   # (bool) Whether to use temporal causality.
-    collaborative_path: True    # (bool) Whether to include users in sampled paths.
+    collaborative_path: False    # (bool) Whether to include users in sampled paths.
     #restrict_by_phase=False with TO — allow finetune paths to end at any item. The model retains broad SEM code coverage and the temporal split no longer hurts. The downside is paths may not be grounded in actual user-item interactions at the terminal hop.
-    restrict_by_phase: True    # (bool) Whether to restrict the last item in the reasoning path by the used ids in the dataloader phase (for fine-tuning, set True).
-    strategy: simple-ui #constrained-rw    # (str) Strategy for sampling paths.
+    restrict_by_phase: False    # (bool) Whether to restrict the last item in the reasoning path by the used ids in the dataloader phase (for fine-tuning, set True).
+    strategy: constrained-rw    # (str) Strategy for sampling paths.
     MAX_CONSECUTIVE_INVALID: 10 # (int) Maximum number of consecutive invalid paths per user.
-    MAX_RW_PATHS_PER_HOP: 10    # (int) Maximum number of paths sampled at each hop for constrained random walk.
+    MAX_RW_PATHS_PER_HOP: 100    # (int) Maximum number of paths sampled at each hop for constrained random walk.
     parallel_max_workers: 1    # (int) Maximum number of workers for parallel processing.
 
     # pretrain only
