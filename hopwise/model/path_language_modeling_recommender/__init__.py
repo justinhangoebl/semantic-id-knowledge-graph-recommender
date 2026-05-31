@@ -5,3 +5,4 @@ from hopwise.model.path_language_modeling_recommender.pearlmllama2 import PEARLM
 from hopwise.model.path_language_modeling_recommender.pearlmllama3 import PEARLMLlama3
 from hopwise.model.path_language_modeling_recommender.plm import PLM
 from hopwise.model.path_language_modeling_recommender.sprig import SPRIG
+from hopwise.model.path_language_modeling_recommender.sprigl import SPRIGL

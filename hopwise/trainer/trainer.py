@@ -2225,3 +2225,11 @@ class SPRIGTrainer(KGGLMTrainer):
     """
 
     pass
+
+
+class SPRIGLTrainer(SPRIGTrainer):
+    r"""SPRIGLTrainer is designed for SPRIGL (SPRIG-L), the layered semantic-ID
+    variant of SPRIG. Training stages and checkpointing are identical to SPRIG.
+    """
+
+    pass

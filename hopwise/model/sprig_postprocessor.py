@@ -185,17 +185,17 @@ class SPRIGSequencePostProcessor(BaseSequencePostProcessor):
         duplicate_item_rate = seqs_with_duplicates / total_seqs
         mean_items_per_sequence = total_distinct_items / total_seqs
 
-        logger.info(
-            "SPRIG: "
-            "valid_sem_block=%.4f, known_i_rate=%.4f, "
-            "known_i_seq_rate=%.4f, dup_i_rate=%.4f, "
-            "mean_i_per_seq=%.2f",
-            valid_sem_block_rate,
-            known_item_rate,
-            known_item_seq_rate,
-            duplicate_item_rate,
-            mean_items_per_sequence,
-        )
+        #logger.info(
+        #    "SPRIG: "
+        #    "valid_sem_block=%.4f, known_i_rate=%.4f, "
+        #    "known_i_seq_rate=%.4f, dup_i_rate=%.4f, "
+        #    "mean_i_per_seq=%.2f",
+        #    valid_sem_block_rate,
+        #    known_item_rate,
+        #    known_item_seq_rate,
+        #    duplicate_item_rate,
+        #    mean_items_per_sequence,
+        #)
 
         self._log_wandb_metrics(
             {

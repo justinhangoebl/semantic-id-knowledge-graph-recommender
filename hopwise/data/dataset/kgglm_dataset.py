@@ -31,11 +31,6 @@ class KGGLMDataset(KnowledgePathDataset):
     def generate_pretrain_dataset(self):
         """Generate pretrain dataset for KGGLM model."""
         import os, pickle
-        saved_paths_file = f"./paths/{self.config.wandb_project}_pretrain_paths_{self.pretrain_hop_length}.pickle"
-        if os.path.exists(saved_paths_file):
-            with open(saved_paths_file, "rb") as f:
-                self._path_dataset = pickle.load(f)
-            return 
 
         if self._path_dataset is None:
             graph = self._create_ckg_igraph(show_relation=True, directed=False)
@@ -81,9 +76,6 @@ class KGGLMDataset(KnowledgePathDataset):
             for path in paths_with_relations:
                 path_string += self._format_path(path) + "\n"
                 
-            with open(saved_paths_file, "wb") as f:
-                pickle.dump(path_string, f)
-
             self._path_dataset = path_string
 
 

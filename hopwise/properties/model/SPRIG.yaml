@@ -38,7 +38,7 @@ valid_metric_bigger: True       # (bool) Whether to take a bigger valid metric v
 numerical_features: []          # (list) Float feature fields to be embedded
 additional_feat_suffix: ~       # (list) Control loading additional atomic files.
 user_inter_num_interval: "[5,inf)"    # (str) User interval for filtering inter, such as [A,B] / [A,B) / (A,B) / (A,B].     [5,inf)
-item_inter_num_interval: "[0,inf)"    # (str) Item interval for filtering inter, such as [A,B] / [A,B) / (A,B) / (A,B].     [5,inf)
+item_inter_num_interval: "[5,inf)"    # (str) Item interval for filtering inter, such as [A,B] / [A,B) / (A,B) / (A,B].     [5,inf)
 
 # knowledge_path_base.yaml
 train_neg_sample_args:
@@ -116,7 +116,7 @@ embedding_size: 768             # (int) Size of the embeddings.
 num_heads: 12                   # (int) Number of heads in the multi-head attention.
 num_layers: 6                   # (int) Number of layers in the transformer.
 path_hop_length: 3              # (int) Number of hops for finetune constrained-rw (pretrain uses pretrain_hop_length).
-MAX_PATHS_PER_USER: 500        # (int) Maximum number of kg sampled paths per user.
+MAX_PATHS_PER_USER: 100        # (int) Maximum number of kg sampled paths per user.
 pretrain_epochs: 3              # (int) Number of epochs for pre-training.
 epochs: 10                       # (int) The number of training epochs.
 train_batch_size: 256           # (int) The training batch size.
@@ -152,6 +152,7 @@ warmup_steps: 500               # (int) Number of warmup steps for learning rate
 
 quantization_method: rkmeans
 semantic_ids_per_item: 3
+layered_semantic_ids: False         # flat SEM tokens (use SPRIGL for layered)
 use_kg_token_types: False
 clip_grad_norm: 
     max_norm: 1.0                # (float) Maximum norm for gradient clipping.
@@ -173,7 +174,7 @@ path_sample_args:
     path_token_separator: " "   # (str) Token separator for paths.
 
     # finetune only
-    temporal_causality: False   # (bool) Whether to use temporal causality.
+    temporal_causality: True   # (bool) Whether to use temporal causality.
     collaborative_path: False    # (bool) Whether to include users in sampled paths.
     #restrict_by_phase=False with TO — allow finetune paths to end at any item. The model retains broad SEM code coverage and the temporal split no longer hurts. The downside is paths may not be grounded in actual user-item interactions at the terminal hop.
     restrict_by_phase: False    # (bool) Whether to restrict the last item in the reasoning path by the used ids in the dataloader phase (for fine-tuning, set True).

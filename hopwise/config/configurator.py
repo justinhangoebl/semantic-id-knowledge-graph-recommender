@@ -533,6 +533,7 @@ class Config:
         deep_dict_update(default_path_sample_args, self.final_config_dict["path_sample_args"])
         if default_path_sample_args["temporal_causality"] and not default_path_sample_args["restrict_by_phase"]:
             default_path_sample_args["restrict_by_phase"] = True
+            logger = getLogger()
             logger.warning("temporal_causality is set to True, restrict_by_phase is automatically set to True.")
 
         self.final_config_dict["path_sample_args"] = default_path_sample_args

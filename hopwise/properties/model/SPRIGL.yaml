@@ -7,11 +7,11 @@ seed: 2024                      # (int) Random seed.
 state: INFO                     # (str) Logging level.
 reproducibility: True           # (bool) Whether or not to make results reproducible.
 data_path: './dataset/'           # (str) The path of input dataset.
-checkpoint_dir: 'saved'         # (str) The path to save checkpoint file.
+checkpoint_dir: './saved/'         # (str) The path to save checkpoint file.
 show_progress: True             # (bool) Whether or not to show the progress bar of every epoch.
 save_dataset: False             # (bool) Whether or not to save filtered dataset.
 dataset_save_path: ~            # (str) The path of saved dataset.
-save_dataloaders: True         # (bool) Whether or not save split dataloaders.
+save_dataloaders: False         # (bool) Whether or not save split dataloaders.
 dataloaders_save_path: './dataloader/' # (str) The path of saved dataloaders.
 log_wandb: True                # (bool) Whether or not to use Weights & Biases(W&B).
 progress_bar_rich: True         # (bool) Whether or not to use rich progress bar.
@@ -27,6 +27,7 @@ enable_amp: False               # (bool) Whether or not to use mixed precision t
 enable_scaler: False            # (bool) Whether or not to use GradScaler in mixed precision training.
 transform: ~                    # (str) The transform operation for batch data process.
 
+
 repeatable: False               # (bool) Whether to evaluate results with a repeatable recommendation scene.
 metrics: ["Recall","MRR","NDCG","Hit","Precision"]  # (list or str) Evaluation metrics.
 topk: [10]                      # (list or int or None) The value of k for topk evaluation metrics.
@@ -37,7 +38,7 @@ valid_metric_bigger: True       # (bool) Whether to take a bigger valid metric v
 numerical_features: []          # (list) Float feature fields to be embedded
 additional_feat_suffix: ~       # (list) Control loading additional atomic files.
 user_inter_num_interval: "[5,inf)"    # (str) User interval for filtering inter, such as [A,B] / [A,B) / (A,B) / (A,B].     [5,inf)
-item_inter_num_interval: "[0,inf)"    # (str) Item interval for filtering inter, such as [A,B] / [A,B) / (A,B) / (A,B].     [5,inf)
+item_inter_num_interval: "[5,inf)"    # (str) Item interval for filtering inter, such as [A,B] / [A,B) / (A,B) / (A,B].     [5,inf)
 
 # knowledge_path_base.yaml
 train_neg_sample_args:
@@ -81,7 +82,7 @@ ui_relation: "[UI-Relation]"    # (str) Name assigned to the interaction relatio
 kg_reverse_r: False             # (bool) Whether to reverse relations of triples for bidirectional edges.
 
 # Knowledge Path Sampling-based Model Needed
-context_length: ~               # (int) Maximum length of the context. Set to (path_hop_length * 2) + 1 (U) + 2 (BOS/EOS) by default.
+context_length: 27               # (int) Maximum length of the context. Set to (path_hop_length * 2) + 1 (U) + 2 (BOS/EOS) by default.
 metapaths: ~                    # (list) Metapaths used to sample paths.
 tokenizer:                      # (dict) Tokenizer parameters.
     model: WordLevel            # (str) Tokenizer model.
@@ -114,10 +115,10 @@ normalize_all: True            # (bool) Whether or not to normalize all the floa
 embedding_size: 768             # (int) Size of the embeddings.
 num_heads: 12                   # (int) Number of heads in the multi-head attention.
 num_layers: 6                   # (int) Number of layers in the transformer.
-path_hop_length: 3              # (int) Number of hops in the knowledge path.
+path_hop_length: 3              # (int) Number of hops for finetune constrained-rw (pretrain uses pretrain_hop_length).
 MAX_PATHS_PER_USER: 250        # (int) Maximum number of kg sampled paths per user.
 pretrain_epochs: 3              # (int) Number of epochs for pre-training.
-epochs: 2                       # (int) The number of training epochs.
+epochs: 3                       # (int) The number of training epochs.
 train_batch_size: 256           # (int) The training batch size.
 eval_batch_size: 128           # (int) The evaluation batch size.
 save_step: 50                   # (int) Number of steps to save the model during pre-training.
@@ -132,38 +133,37 @@ eval_args:                      # (dict) 4 keys: group_by, order, split, and mod
   order: TO                     # (str) The ordering strategy ranging in ['RO', 'TO'].
   mode: full                    # (str) The evaluation mode ranging in ['full','unixxx','popxxx','labeled'].
 
-# KGGLM.yaml
-gpu_id: '9'                                         # (str) The id of GPU device(s).
+# SPRIG.yaml
+gpu_id: '3'                                         # (str) The id of GPU device(s).
 
-wandb_project: 'KGGLM - ml1m - cold'     # (str) The project name in W&B.        ml-1m
-#wandb_project: ' KGGLM - lfm - cold'     # (str) The project name in W&B.        lfm
+wandb_project: 'SPRIGL - ml1m - cold_start' # (str) The project name in W&B.            ml1m
+#wandb_project: 'SPRIGL - lfm - cold_start' # (str) The project name in W&B.            ml1m
 
 train_stage: 'pretrain'                            # (str) The training stage. Range in ['pretrain', 'finetune'].
 pre_model_path: ''                                 # (str) The path of pretrained model.
 
 train_stage: 'finetune'                            # (str) The training stage. Range in ['pretrain', 'finetune'].
-pre_model_path: 'saved/huggingface-distilgpt2-KGGLM-ml1m-pretrained-3-May-31-2026_03-17-07.pth/checkpoint-80586'  # (str) The path of pretrained model.
-#pre_model_path: 'saved/huggingface-distilgpt2-KGGLM-lfm-pretrained-3-May-31-2026_08-16-49.pth/checkpoint-156300'
+pre_model_path: './saved/huggingface-distilgpt2-SPRIGL-ml1m-pretrained-3-May-28-2026_19-32-12.pth/checkpoint-80592/'      # (str) The path of pretrained model. ml1m
+#pre_model_path: './saved/huggingface-distilgpt2-SPRIGL-lfm-pretrained-3-May-30-2026_20-57-31.pth/checkpoint-131283/'      # (str) The path of pretrained model. ml1m
 
-
-cold_start_holdout_ratio: 0.2
+cold_start_holdout_ratio: 0.20
 #cold_start_holdout_ratio: 0
 
-learning_rate: 2e-4             # (float) Learning rate for optimizer.                      ml-1m
-weight_decay: 0.01              # (float) Weight decay for optimizer.                       ml-1m
-warmup_steps: 500               # (int) Number of warmup steps for learning rate scheduler. ml-1m
+learning_rate: 2e-5             # (float) Learning rate for optimizer.                      lfm
+weight_decay: 0.01              # (float) Weight decay for optimizer.                       lfm
+warmup_steps: 500               # (int) Number of warmup steps for learning rate scheduler. lfm
 
-#learning_rate: 2e-4             # (float) Learning rate for optimizer.                      lfm
-#weight_decay: 0.01              # (float) Weight decay for optimizer.                       lfm
-#warmup_steps: 2000               # (int) Number of warmup steps for learning rate scheduler. lfm
-
-use_kg_token_types: True        # (bool) Whether to use token types for the knowledge graph.
-clip_grad_norm: ~               # (dict) The args of clip_grad_norm_ which will clip gradient norm of model.
+quantization_method: rkmeans
+semantic_ids_per_item: 3
+layered_semantic_ids: True         # flat SEM tokens (use SPRIGL for layered)
+use_kg_token_types: False
+clip_grad_norm: 
+  max_norm: 1.0                            # (float) Maximum norm of the gradients.
 learner: adamW                  # (str) The name of used optimizer.
 
 path_generation_args:
-    paths_per_user: 20          # (int) Number of paths generated per user.
-    num_beams: 30               # (int) Number of beams for beam search.
+    paths_per_user: 30         # (int) Number of paths generated per user.
+    num_beams: 50               # (int) Number of beams for beam search.
     num_beam_groups: 5          # (int) Number of groups for diverse beam search.
     diversity_penalty: 0.3      # (float) Diversity penalty for beam search.
     length_penalty: 0.0         # (float) Length penalty for beam search.
@@ -178,28 +178,14 @@ path_sample_args:
 
     # finetune only
     temporal_causality: False   # (bool) Whether to use temporal causality.
-    collaborative_path: False   # (bool) Whether to include users in sampled paths. True causes dead-ends: users in CKG only connect to items, so any intermediate-hop user has no entity neighbors and the path dies.
+    collaborative_path: False    # (bool) Whether to include users in sampled paths.
+    #restrict_by_phase=False with TO — allow finetune paths to end at any item. The model retains broad SEM code coverage and the temporal split no longer hurts. The downside is paths may not be grounded in actual user-item interactions at the terminal hop.
     restrict_by_phase: False    # (bool) Whether to restrict the last item in the reasoning path by the used ids in the dataloader phase (for fine-tuning, set True).
     strategy: constrained-rw    # (str) Strategy for sampling paths.
     MAX_CONSECUTIVE_INVALID: 10 # (int) Maximum number of consecutive invalid paths per user.
-    MAX_RW_PATHS_PER_HOP: 10    # (int) Maximum number of paths sampled at each hop for constrained random walk.
+    MAX_RW_PATHS_PER_HOP: 100    # (int) Maximum number of paths sampled at each hop for constrained random walk.
     parallel_max_workers: 1    # (int) Maximum number of workers for parallel processing.
 
     # pretrain only
     pretrain_hop_length: (5, 5)  # (tuple) The range of the hop length for pre-training. Paper uses 5 hops.
     pretrain_paths: 500          # (int) Number of paths per entity for pre-training. Paper uses 500.
-
-
-#Training dynamics — standard to sweep:
-#
-#learning_rate: 2e-4 — most sensitive; try 1e-4, 3e-4. Training from scratch is more sensitive here than fine-tuning a pretrained model.
-#warmup_steps: 250 — 250 steps is likely too few if your dataset is large (500 paths × all entities). Should scale with ~5–10% of total pretrain steps. Worth testing 500–2000.
-#pretrain_epochs: 3 — how much pretraining transfers to finetune is the central question; test 3, 5, 10. More epochs don't always help if the paths are too repetitive.
-#train_batch_size: 256 — interacts with learning_rate via effective gradient noise; less interesting to sweep alone.
-
-
-#Pretrain dataset — high impact, SPRIG-specific:
-#
-#pretrain_hop_length: (5, 5) — fixed length is conservative. A variable range like (3, 5) exposes the model to shorter paths (more common in sparse KGs) and may improve robustness. The sequence length is auto-set from pretrain_hop_length[1], so (3,5) vs (5,5) is a clean ablation.
-#pretrain_paths: 500 — directly controls dataset size per entity. Halving to 250 saves compute; doubling to 1000 may help coverage for low-degree entities. Diminishing returns past a point.
-#MAX_RW_TRIES_PER_IID: 100 — at 100 tries you're already near saturation for most entities; not worth sweeping.

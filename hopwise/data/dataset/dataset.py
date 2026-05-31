@@ -1638,6 +1638,57 @@ class Dataset(torch.utils.data.Dataset):
         else:
             raise NotImplementedError(f"The splitting_method [{split_mode}] has not been implemented.")
 
+        holdout_ratio = self.config.get("cold_start_holdout_ratio", 0.0)
+        if holdout_ratio and holdout_ratio > 0:
+            datasets = self._apply_cold_start_holdout(datasets, holdout_ratio)
+
+        return datasets
+
+    def _apply_cold_start_holdout(self, datasets, ratio):
+        """Remove the rarest `ratio` fraction of items from the training split.
+
+        Items are ranked by training-split frequency (ascending). The bottom
+        `ratio` fraction is held out — their interactions are stripped from
+        training so the model never sees them during fine-tuning. Semantic or
+        KG-based models can still recommend them via compositional IDs.
+
+        Sets ``_held_out_items`` (set of internal item IDs) and
+        ``_held_out_item_freq`` (dict item→original_train_count) on every
+        split dataset so the evaluation script can read them.
+        """
+        from collections import Counter
+
+        train_ds = datasets[0]
+        iid_field = self.iid_field
+
+        train_iids = train_ds.inter_feat[iid_field].numpy().tolist()
+        freq = Counter(train_iids)
+
+        sorted_by_freq = sorted(freq.items(), key=lambda x: x[1])
+        n_holdout = max(1, int(len(sorted_by_freq) * ratio))
+        held_out_pairs = sorted_by_freq[:n_holdout]
+        held_out_items = {item for item, _ in held_out_pairs}
+        held_out_freq = dict(held_out_pairs)
+
+        self.logger.info(
+            f"Cold-start holdout: {len(held_out_items)} items removed from training "
+            f"({ratio:.1%} of {len(sorted_by_freq)} items). "
+            f"Freq range: [{min(held_out_freq.values())}, {max(held_out_freq.values())}]"
+        )
+
+        # Remove held-out interactions from training split.
+        keep = torch.tensor(
+            [iid not in held_out_items for iid in train_ds.inter_feat[iid_field].tolist()],
+            dtype=torch.bool,
+        )
+        train_ds.inter_feat = train_ds.inter_feat[keep]
+
+        # Propagate metadata to all split datasets (copies don't auto-inherit
+        # attributes set after copy.copy was called).
+        for ds in datasets:
+            ds._held_out_items = held_out_items
+            ds._held_out_item_freq = held_out_freq
+
         return datasets
 
     def save(self):
