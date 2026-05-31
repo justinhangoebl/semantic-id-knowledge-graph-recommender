@@ -87,6 +87,10 @@ class SPRIGDataset(KnowledgePathDataset):
         self.pretrain_paths = int(path_args["pretrain_paths"])
 
 
+        self.layered_semantic_ids = bool(
+            self.config["layered_semantic_ids"] if "layered_semantic_ids" in self.config else False
+        )
+
         if self.train_stage == "finetune":
             # Exact length: BOS + U + H*(R + 1 intermediate token) + 2*N SEM tokens + EOS
             # = 2*H + 2*N + 1  (intermediate nodes are always 1 token — entity or user)
@@ -171,18 +175,35 @@ class SPRIGDataset(KnowledgePathDataset):
         from tokenizers import trainers as token_trainers
         from transformers import PreTrainedTokenizerFast
 
-        # K = number of distinct SEM token types (max observed code + 1).
-        all_codes = [c for codes in self._raw_semantic_mapping.values() for c in codes]
-        K = int(max(all_codes)) + 1
-
         # entity_range: non-item entity IDs (item_num … entity_num-1).
         entity_range = np.arange(self.item_num, self.entity_num)
+
+        if self.layered_semantic_ids:
+            # Layered vocab: SEM_{l}_{k} per hierarchy level l, code k.
+            # Compute per-layer code range from the data.
+            N = self.semantic_ids_per_item
+            per_layer_codes: list[list[int]] = [[] for _ in range(N)]
+            for codes in self._raw_semantic_mapping.values():
+                for l, c in enumerate(codes):
+                    per_layer_codes[l].append(c)
+            K_per_layer = [int(max(pc)) + 1 for pc in per_layer_codes]
+            sem_tokens_list = [
+                f"SEM_{l}_{k}"
+                for l in range(N)
+                for k in range(K_per_layer[l])
+            ]
+            sem_token_array = np.array(sem_tokens_list)
+        else:
+            # Flat vocab: SEM{k} shared across all levels.
+            all_codes = [c for codes in self._raw_semantic_mapping.values() for c in codes]
+            K = int(max(all_codes)) + 1
+            sem_token_array = np.char.add(PathLanguageModelingTokenType.SEMANTIC.token,
+                                          np.arange(K).astype(str))
 
         token_vocab = np.concatenate([
             np.char.add(PathLanguageModelingTokenType.USER.token,
                         np.arange(self.user_num).astype(str)),
-            np.char.add(PathLanguageModelingTokenType.SEMANTIC.token,
-                        np.arange(K).astype(str)),          # SEM0 … SEM{K-1}
+            sem_token_array,
             np.char.add(PathLanguageModelingTokenType.ENTITY.token,
                         entity_range.astype(str)),
             np.char.add(PathLanguageModelingTokenType.RELATION.token,
@@ -248,6 +269,7 @@ class SPRIGDataset(KnowledgePathDataset):
             self._internal_semantic_mapping,
             self._tokenizer,
             self.semantic_ids_per_item,
+            layered=self.layered_semantic_ids,
         )
 
     # ------------------------------------------------------------------
@@ -283,9 +305,14 @@ class SPRIGDataset(KnowledgePathDataset):
                 if item_id not in self._internal_semantic_mapping:
                     return None  # path contains unmapped item — drop it
                 codes = self._internal_semantic_mapping[item_id]
-                node_token_lists.append(
-                    [PathLanguageModelingTokenType.SEMANTIC.token + str(c) for c in codes]
-                )
+                if self.layered_semantic_ids:
+                    node_token_lists.append(
+                        [f"SEM_{l}_{c}" for l, c in enumerate(codes)]
+                    )
+                else:
+                    node_token_lists.append(
+                        [PathLanguageModelingTokenType.SEMANTIC.token + str(c) for c in codes]
+                    )
             else:
                 # Non-item entity vertex.
                 # entity_range starts at item_num, so the token is E{n - user_num}.

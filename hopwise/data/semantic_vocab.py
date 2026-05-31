@@ -29,9 +29,11 @@ class SemanticVocab:
         tokenizer,
         semantic_ids_per_item: int,
         resolve_collisions: bool = False,
+        layered: bool = False,
     ) -> None:
         self._tokenizer = tokenizer
         self._semantic_ids_per_item = int(semantic_ids_per_item)
+        self._layered = layered
         self.item_to_token_ids: Dict[int, List[int]] = {}
 
         sem_prefix = PathLanguageModelingTokenType.SEMANTIC.token
@@ -45,13 +47,17 @@ class SemanticVocab:
 
         for item_id, codes in semantic_id_mapping.items():
             token_ids: List[int] = []
-            for code in codes:
-                token_name = f"{sem_prefix}{int(code)}"
+            for level, code in enumerate(codes):
+                if layered:
+                    token_name = f"SEM_{level}_{int(code)}"
+                else:
+                    token_name = f"{sem_prefix}{int(code)}"
                 tid = tokenizer.convert_tokens_to_ids(token_name)
                 if tid == tokenizer.unk_token_id:
                     raise ValueError(
-                        f"SPRIG Tokenizer mismatch: Token '{token_name}' (required for item {item_id}) "
-                        "not found in vocabulary. Ensure _init_tokenizer scanned all possible codes."
+                        f"SPRIG{'L' if layered else ''} Tokenizer mismatch: Token '{token_name}' "
+                        f"(required for item {item_id}) not found in vocabulary. "
+                        "Ensure _init_tokenizer scanned all possible codes."
                     )
                 token_ids.append(int(tid))
 

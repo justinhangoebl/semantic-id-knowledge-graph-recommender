@@ -227,6 +227,8 @@ class SPRIG(PEARLM):
         """Generate sequences and keep raw SEM tokens for semantic evaluation."""
         kwargs["max_length"] = self.token_sequence_length
         kwargs["min_length"] = self.token_sequence_length
+        kwargs.setdefault("return_dict_in_generate", True)
+        kwargs.setdefault("output_scores", True)
         outputs = self.generate(inputs, **kwargs)
 
         max_new_tokens = self.token_sequence_length - inputs["input_ids"].size(1)

@@ -6,4 +6,5 @@ from hopwise.data.dataset.decisiontree_dataset import DecisionTreeDataset
 from hopwise.data.dataset.kg_path_dataset import KnowledgePathDataset
 from hopwise.data.dataset.customized_dataset import *
 from hopwise.data.dataset.sprig_dataset import SPRIGDataset
+from hopwise.data.dataset.sprigl_dataset import SPRIGLDataset
 from hopwise.data.dataset.kgglm_dataset import KGGLMDataset
