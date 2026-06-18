@@ -38,10 +38,6 @@ class SPRIG(PEARLM):
         # Store semantic vocab for postprocessing
         self.semantic_vocab = dataset.semantic_vocab
 
-        # Disable all logits processors
-        self.logits_processor_list = []
-
-        # Replace the default postprocessor with SPRIG's SEM-block scanner.
         self.sequence_postprocessor = SPRIGSequencePostProcessor(
             tokenizer=dataset.tokenizer,
             used_ids=dataset.get_user_used_ids(),
@@ -49,7 +45,11 @@ class SPRIG(PEARLM):
             semantic_vocab=self.semantic_vocab,
             semantic_ids_per_item=dataset.semantic_ids_per_item,
             topk=config["topk"],
+            held_out_items=getattr(dataset, "_held_out_items", None),
+            cold_start_epsilon=config["cold_start_epsilon"] or 0.2,
         )
+
+        self.logits_processor_list = []
 
         self.train_stage = config["train_stage"]
         self.pre_model_path = config["pre_model_path"]
@@ -228,7 +228,8 @@ class SPRIG(PEARLM):
         kwargs["max_length"] = self.token_sequence_length
         kwargs["min_length"] = self.token_sequence_length
         kwargs.setdefault("return_dict_in_generate", True)
-        kwargs.setdefault("output_scores", True)
+        if self.output_scores:
+            kwargs.setdefault("output_scores", True)
         outputs = self.generate(inputs, **kwargs)
 
         max_new_tokens = self.token_sequence_length - inputs["input_ids"].size(1)

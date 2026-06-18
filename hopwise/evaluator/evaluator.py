@@ -21,7 +21,10 @@ class Evaluator:
         self.metric_class = {}
 
         for metric in self.metrics:
-            self.metric_class[metric] = metrics_dict[metric](self.config)
+            m = metrics_dict[metric](self.config)
+            m._sig_model = self.config["model"]
+            m._sig_dataset = self.config["dataset"]
+            self.metric_class[metric] = m
 
     def evaluate(self, dataobject: DataStruct):
         """Calculate all the metrics. It is called at the end of each epoch

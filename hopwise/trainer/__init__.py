@@ -19,4 +19,8 @@ __all__ = [
     "PEARLMfromscratchTrainer",
     "HFPathLanguageModelingTrainer",
     "KGGLMTrainer",
+    "SPRIGTrainer",
+    "SPRIGLTrainer",
+    "BoostedSPRIGTrainer",
+    "BoostedSPRIGLTrainer",
 ]

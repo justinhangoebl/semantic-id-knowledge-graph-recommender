@@ -186,3 +186,5 @@ path_sample_args:
     # pretrain only
     pretrain_hop_length: (5, 5)  # (tuple) The range of the hop length for pre-training. Paper uses 5 hops.
     pretrain_paths: 500          # (int) Number of paths per entity for pre-training. Paper uses 500.
+
+output_scores: False           # (bool) Whether to store per-step logit scores during generation (expensive, needed for significance testing).

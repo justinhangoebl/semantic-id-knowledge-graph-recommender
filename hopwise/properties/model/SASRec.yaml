@@ -14,12 +14,12 @@ learning_rate: 0.001          # (float) Standard SASRec LR; global default 2e-4 
 train_batch_size: 2048        # (int) 8x global default; cuts epoch time from ~33 min to ~4-5 min.
 
 
-eval_args:                      # (dict) 4 keys: group_by, order, split, and mode
-  split: {'RS':[0.6,0.2,0.2]}   # (dict) The splitting strategy ranging in ['RS','LS'].
-  group_by: user                # (str) The grouping strategy ranging in ['user', 'none'].
-  order: TO                     # (str) The ordering strategy ranging in ['RO', 'TO'].
-  mode: full                    # (str) The evaluation mode ranging in ['full','unixxx','popxxx','labeled'].
-
+eval_args:
+  group_by: user
+  order: TO
+  split: {'LS': 'valid_and_test'}   # last item = test, 2nd-last = valid
+  mode: full                         # rank all items, no sampled negatives
+  
 train_neg_sample_args: ~
 
 user_inter_num_interval: "[5,inf)"    # (str) User interval for filtering inter, such as [A,B] / [A,B) / (A,B) / (A,B].     [5,inf)
@@ -28,4 +28,8 @@ item_inter_num_interval: "[5,inf)"    # (str) Item interval for filtering inter,
 load_col:
     inter: ['user_id', 'item_id', 'timestamp']
 
-gpu_id: '1'                         # (int) The GPU id to use. Range in [-1, 0, 1, 2, 3]. -1 means using CPU.
+gpu_id: '5'                         # (int) The GPU id to use. Range in [-1, 0, 1, 2, 3]. -1 means using CPU.
+
+#cold_start_holdout_ratio: 0.2
+
+output_scores: False           # (bool) Whether to store per-step logit scores during generation (expensive, needed for significance testing).
