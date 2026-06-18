@@ -106,7 +106,7 @@ class PEARLM(ExplainablePathLanguageModelingRecommender, GPT2LMHeadModel):
 
         if self.use_kg_token_types:
             # indexing is only relevant during generation to match token types length with input_ids
-            token_type_ids = self.token_type_ids[[*range(input_ids.shape[1] - 1), -1]]
+            token_type_ids = self.token_type_ids[[*range(input_ids.shape[1] - 1), -1]].to(input_ids.device)
             token_type_ids = token_type_ids.expand(input_ids.shape[0], -1)
 
         transformer_outputs = self.transformer(

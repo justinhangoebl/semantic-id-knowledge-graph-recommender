@@ -1,6 +1,8 @@
 import logging
+from collections import defaultdict
 
 import torch
+from transformers import LogitsProcessor
 
 from hopwise.model.sequence_postprocessor import BaseSequencePostProcessor
 from hopwise.utils import PathLanguageModelingTokenType
@@ -8,14 +10,153 @@ from hopwise.utils import PathLanguageModelingTokenType
 logger = logging.getLogger(__name__)
 
 
+class SPRIGSemanticPreferenceLogitsProcessor(LogitsProcessor):
+    """Two-in-one logits processor for SPRIG inference.
+
+    History blocking (depth 0)
+    --------------------------
+    At the start of each SEM block, blocks first-SEM tokens whose entire
+    reachable item set is already in the user's interaction history.  Those
+    beams would be discarded post-generation anyway; redirecting them early
+    gives the full beam budget to novel items.
+
+    Semantic preference boosting (depth 0..N-1)
+    --------------------------------------------
+    At block position k, adds a scaled prior toward the SEM token IDs that
+    appeared at depth k across the user's history items.  This injects a
+    per-user "SEM code profile" — a lightweight collaborative-filtering signal
+    at the token level that generalises across semantically similar items.
+
+    Args:
+        semantic_vocab : SemanticVocab with item_to_token_ids populated.
+        used_ids       : array-like, used_ids[uid] = set of interacted item IDs.
+        tokenizer      : dataset tokenizer (to decode U_X token → uid integer).
+        N              : semantic_ids_per_item.
+        vocab_size     : total tokenizer vocabulary size.
+        alpha          : weight of the preference prior added to logits (default 0.5).
+    """
+
+    def __init__(self, semantic_vocab, used_ids, tokenizer, N: int, vocab_size: int, alpha: float = 0.5):
+        self.N = N
+        self.vocab_size = vocab_size
+        self.alpha = alpha
+
+        user_prefix = PathLanguageModelingTokenType.USER.token
+        sem_prefix = PathLanguageModelingTokenType.SEMANTIC.token
+
+        # ── user token ID → uid integer ───────────────────────────────────────
+        self._token_to_uid: dict[int, int] = {}
+        for tok, tid in tokenizer.get_vocab().items():
+            if tok.startswith(user_prefix):
+                try:
+                    self._token_to_uid[int(tid)] = int(tok[len(user_prefix):])
+                except ValueError:
+                    pass
+
+        # ── all SEM token IDs ─────────────────────────────────────────────────
+        self._all_sem: frozenset[int] = frozenset(
+            int(tid) for tok, tid in tokenizer.get_vocab().items()
+            if tok.startswith(sem_prefix)
+        )
+
+        # ── first_tok_to_items[t] = frozenset of item IDs reachable via SEM[0]==t
+        first_tok_to_items: dict[int, set[int]] = defaultdict(set)
+        for item_id, tids in semantic_vocab.item_to_token_ids.items():
+            first_tok_to_items[tids[0]].add(int(item_id))
+        self._first_tok_to_items: dict[int, frozenset[int]] = {
+            k: frozenset(v) for k, v in first_tok_to_items.items()
+        }
+
+        # ── per-user item history (for history blocking) ──────────────────────
+        self._history: dict[int, frozenset[int]] = {
+            uid: frozenset(int(x) for x in used_ids[uid])
+            for uid in range(len(used_ids))
+        }
+
+        # ── per-user SEM preference profile ──────────────────────────────────
+        # _pref[uid][depth] = {sem_token_id: normalised_weight}
+        self._pref: dict[int, list[dict[int, float]]] = {}
+        for uid in range(len(used_ids)):
+            depth_counts: list[defaultdict] = [defaultdict(float) for _ in range(N)]
+            for item_id in used_ids[uid]:
+                tids = semantic_vocab.item_to_token_ids.get(int(item_id))
+                if tids is None:
+                    continue
+                for d, tid in enumerate(tids[:N]):
+                    depth_counts[d][int(tid)] += 1.0
+            depth_pref: list[dict[int, float]] = []
+            for d in range(N):
+                total = sum(depth_counts[d].values()) or 1.0
+                depth_pref.append({k: v / total for k, v in depth_counts[d].items()})
+            self._pref[uid] = depth_pref
+
+        # ── device cache: (uid, depth, device_str) → FloatTensor (V,) ────────
+        self._pref_cache: dict = {}
+
+    def _pref_tensor(self, uid: int, depth: int, device: torch.device) -> torch.Tensor:
+        key = (uid, depth, str(device))
+        if key not in self._pref_cache:
+            t = torch.zeros(self.vocab_size, dtype=torch.float32, device=device)
+            for tok_id, weight in self._pref[uid][depth].items():
+                if tok_id < self.vocab_size:
+                    t[tok_id] = weight
+            self._pref_cache[key] = t
+        return self._pref_cache[key]
+
+    def __call__(
+        self,
+        input_ids: torch.LongTensor,
+        scores: torch.FloatTensor,
+    ) -> torch.FloatTensor:
+        device = scores.device
+
+        for i in range(input_ids.shape[0]):
+            seq = input_ids[i].tolist()
+
+            # Count consecutive SEM tokens at end → depth within current block.
+            block: list[int] = []
+            for tok in reversed(seq):
+                if tok in self._all_sem and len(block) < self.N:
+                    block.append(tok)
+                else:
+                    break
+            block.reverse()
+            depth = len(block)
+
+            if depth >= self.N:
+                continue  # block just finished; nothing to modify
+
+            # U_X token is always at position 1 in the sequence.
+            uid = self._token_to_uid.get(seq[1] if len(seq) > 1 else -1)
+            if uid is None:
+                continue
+
+            # ── semantic preference boost ─────────────────────────────────────
+            scores[i] += self.alpha * self._pref_tensor(uid, depth, device)
+
+            # ── history blocking (depth 0 only) ───────────────────────────────
+            if depth == 0:
+                history = self._history.get(uid, frozenset())
+                to_block = [
+                    t for t, reachable in self._first_tok_to_items.items()
+                    if reachable <= history  # all reachable items already seen
+                ]
+                if to_block:
+                    scores[i, torch.tensor(to_block, dtype=torch.long, device=device)] = float("-inf")
+
+        return scores
+
+
 class SPRIGSequencePostProcessor(BaseSequencePostProcessor):
     """Post-processor for SPRIG's semantic-ID sequences.
     """
 
-    def __init__(self, tokenizer, used_ids, item_num, semantic_vocab, semantic_ids_per_item, topk=10):
+    def __init__(self, tokenizer, used_ids, item_num, semantic_vocab, semantic_ids_per_item,
+                 topk=10, held_out_items=None, cold_start_epsilon=1.0):
         super().__init__(tokenizer, used_ids, item_num, topk=topk)
         self.semantic_vocab = semantic_vocab
         self.N = int(semantic_ids_per_item)
+        self.cold_start_epsilon = cold_start_epsilon
 
         # Pre-compute the set of all token IDs that are SEM tokens for O(1) membership tests.
         sem_prefix = PathLanguageModelingTokenType.SEMANTIC.token
@@ -23,6 +164,19 @@ class SPRIGSequencePostProcessor(BaseSequencePostProcessor):
         self.sem_token_id_set = frozenset(
             tid for tok, tid in vocab.items() if tok.startswith(sem_prefix)
         )
+
+        # TIGER-style prefix matching for cold-start.
+        # Maps (t0, t1, …, t_{N-2}) → [cold_item_id, …] so that when the model
+        # predicts a full SEM block for a seen item, held-out items sharing the
+        # same first N-1 tokens are also surfaced as candidates.
+        self._prefix_to_cold: dict[tuple, list[int]] = {}
+        if held_out_items:
+            for item_id in held_out_items:
+                tids = semantic_vocab.item_to_token_ids.get(int(item_id))
+                if tids is None or len(tids) < self.N:
+                    continue
+                prefix = tuple(tids[: self.N - 1])
+                self._prefix_to_cold.setdefault(prefix, []).append(int(item_id))
 
     def get_sequences(self, generation_outputs, max_new_tokens=24):
         """Extract scores and structured paths from generation outputs.
@@ -57,10 +211,21 @@ class SPRIGSequencePostProcessor(BaseSequencePostProcessor):
         path. Each valid block is scored with its parent sequence's beam score.
         Higher-scored beams are processed first (caller sorts descending), and
         the ``isfinite`` check ensures the first score seen for an item wins.
+
+        When held_out_items were supplied at construction time, TIGER-style
+        prefix matching is also applied: for each terminal SEM block that maps
+        to a seen item, held-out items sharing the first N-1 tokens are added
+        as additional candidates (with the same beam score).  cold_start_epsilon
+        caps the fraction of cold candidates surfaced per user.
         """
         user_num = user_index.unique().numel()
         scores = torch.full((user_num, self.item_num), -torch.inf)
         user_topk_sequences = []
+
+        # Track cold-candidate count per user for ε enforcement.
+        cold_counts: dict[int, int] = defaultdict(int)
+        topk_max = max(self.topk) if isinstance(self.topk, (list, tuple)) else int(self.topk)
+        cold_budget = int(topk_max * self.cold_start_epsilon)
 
         for batch_uidx, sequence, sequence_score in zip(user_index, sequences, sequences_scores):
             seq_tokens = self.tokenizer.decode(sequence).split(" ")
@@ -74,25 +239,68 @@ class SPRIGSequencePostProcessor(BaseSequencePostProcessor):
                 continue
             uid = int(uid_token[len(PathLanguageModelingTokenType.USER.token):])
 
-            # Extract all valid items from the sequence.
-            items = self.get_recommended_items(token_ids)
-            if not items:
-                continue
+            # Extract terminal SEM block together with its raw token IDs.
+            item_id, block_token_ids = self._get_terminal_item_and_block(token_ids)
 
-            for item_id in items:
+            # ── exact match (seen item) ────────────────────────────────────────
+            if item_id is not None:
                 item_id = int(item_id)
-                if item_id < 0 or item_id >= self.item_num:
-                    continue
-                # First score wins (sequences are sorted by descending score).
-                if torch.isfinite(scores[batch_uidx, item_id]):
-                    continue
-                if uid in self.used_ids and item_id in self.used_ids[uid]:
-                    continue
+                if 0 <= item_id < self.item_num:
+                    if not torch.isfinite(scores[batch_uidx, item_id]):
+                        if not (uid in self.used_ids and item_id in self.used_ids[uid]):
+                            scores[batch_uidx, item_id] = sequence_score
+                            user_topk_sequences.append(
+                                [uid, item_id, sequence_score.item(), seq_tokens]
+                            )
 
-                scores[batch_uidx, item_id] = sequence_score
-                user_topk_sequences.append([uid, item_id, sequence_score.item(), seq_tokens])
+            # ── TIGER prefix matching (cold items) ────────────────────────────
+            if block_token_ids is not None and self._prefix_to_cold:
+                prefix = tuple(block_token_ids[: self.N - 1])
+                cold_candidates = self._prefix_to_cold.get(prefix, [])
+                u_idx = batch_uidx.item() if hasattr(batch_uidx, "item") else int(batch_uidx)
+                for cold_id in cold_candidates:
+                    if cold_counts[u_idx] >= cold_budget:
+                        break
+                    if cold_id < 0 or cold_id >= self.item_num:
+                        continue
+                    if torch.isfinite(scores[batch_uidx, cold_id]):
+                        continue
+                    if uid in self.used_ids and cold_id in self.used_ids[uid]:
+                        continue
+                    scores[batch_uidx, cold_id] = sequence_score
+                    cold_counts[u_idx] += 1
+                    user_topk_sequences.append(
+                        [uid, cold_id, sequence_score.item(), seq_tokens]
+                    )
 
         return scores, user_topk_sequences
+
+    def _get_terminal_item_and_block(self, token_ids: list[int]):
+        """Return (item_id, block_token_ids) for the last complete SEM block,
+        or (None, None) if no complete block is found."""
+        token_ids = [int(t) for t in token_ids]
+        last_item = None
+        last_block = None
+
+        i = 0
+        while i < len(token_ids):
+            if token_ids[i] in self.sem_token_id_set:
+                block = []
+                j = i
+                while j < len(token_ids) and token_ids[j] in self.sem_token_id_set and len(block) < self.N:
+                    block.append(token_ids[j])
+                    j += 1
+                if len(block) == self.N:
+                    item_id = self.semantic_vocab.reverse_map(tuple(block))
+                    if item_id is not None and 0 <= int(item_id) < self.item_num:
+                        last_item = int(item_id)
+                        last_block = block
+                    i = j
+                else:
+                    i = j
+            else:
+                i += 1
+        return last_item, last_block
     
     def get_recommended_items(self, token_ids, top_k=None):
         """Extract the terminal item from a single generated token-ID sequence.

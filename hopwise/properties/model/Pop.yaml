@@ -9,3 +9,7 @@ item_inter_num_interval: "[0,inf)"    # (str) Item interval for filtering inter,
 
 load_col:
     inter: ['user_id', 'item_id', 'timestamp']
+
+gpu_id: '5'
+
+output_scores: False           # (bool) Whether to store per-step logit scores during generation (expensive, needed for significance testing).

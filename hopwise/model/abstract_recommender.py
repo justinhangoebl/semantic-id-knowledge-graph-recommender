@@ -275,6 +275,9 @@ class PathLanguageModelingRecommender(KnowledgeRecommender):
 
         self.n_tokens = len(dataset.tokenizer)
         self.token_sequence_length = dataset.token_sequence_length - 1  # EOS token is not included
+        # `self.config` is reserved by the underlying HuggingFace PreTrainedModel
+        # (e.g. GPT2Config), so the hopwise config flag is cached separately here.
+        self.output_scores = bool(config["output_scores"])
 
         logits_processor = get_logits_processor(config["model"])(
             tokenized_ckg=dataset.get_tokenized_ckg(),
@@ -349,6 +352,9 @@ class ExplainablePathLanguageModelingRecommender(PathLanguageModelingRecommender
     def explain(self, inputs, **kwargs):
         kwargs["max_length"] = self.token_sequence_length
         kwargs["min_length"] = self.token_sequence_length
+        kwargs.setdefault("return_dict_in_generate", True)
+        if self.output_scores:
+            kwargs.setdefault("output_scores", True)
         outputs = self.generate(inputs, **kwargs)
 
         max_new_tokens = self.token_sequence_length - inputs["input_ids"].size(1)

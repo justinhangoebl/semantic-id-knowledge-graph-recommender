@@ -2233,3 +2233,11 @@ class SPRIGLTrainer(SPRIGTrainer):
     """
 
     pass
+
+
+class BoostedSPRIGTrainer(SPRIGTrainer):
+    pass
+
+
+class BoostedSPRIGLTrainer(SPRIGLTrainer):
+    pass

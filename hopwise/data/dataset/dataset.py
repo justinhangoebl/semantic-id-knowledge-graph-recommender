@@ -1638,7 +1638,7 @@ class Dataset(torch.utils.data.Dataset):
         else:
             raise NotImplementedError(f"The splitting_method [{split_mode}] has not been implemented.")
 
-        holdout_ratio = self.config.get("cold_start_holdout_ratio", 0.0)
+        holdout_ratio = self.config["cold_start_holdout_ratio"]
         if holdout_ratio and holdout_ratio > 0:
             datasets = self._apply_cold_start_holdout(datasets, holdout_ratio)
 
