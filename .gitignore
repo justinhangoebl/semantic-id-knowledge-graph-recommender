@@ -126,3 +126,6 @@ conversion_tools/
 *.md
 *.png
 *.jpg
+
+sig_scores/
+tests/
