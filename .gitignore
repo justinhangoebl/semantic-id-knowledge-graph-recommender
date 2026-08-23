@@ -25,6 +25,7 @@ wheels/
 .installed.cfg
 *.egg
 ./cold_start_eval.py
+.claude/
 
 
 # Unit test / coverage reports
