@@ -8,7 +8,7 @@ from train_rq_vae import train as train_rqvae
 from train_rk_means import train as train_rkmeans
 from train_rvq import train as train_rvq
 from omegaconf import OmegaConf
-from data.loader import load_movie_lens, load_lfm
+from data.loader import load_movie_lens, load_onion
 from modules.rq_vae import RQ_VAE
 from modules.rk_means import RKMeans
 from modules.rvq import RVQ
@@ -30,8 +30,8 @@ def load_data(config):
             train=True,
             raw=True,
         )
-    elif config.data.dataset == 'lfm':
-        data = load_lfm(
+    elif config.data.dataset == 'onion':
+        data = load_onion(
             embedding_type=config.data.embedding_dimension,
             normalize_data=config.data.normalize_data,
         )

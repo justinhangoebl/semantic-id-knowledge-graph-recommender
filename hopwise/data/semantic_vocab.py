@@ -18,9 +18,11 @@ class SemanticVocab:
         tokenizer: tokenizer with `token_to_id(str)` method and SEM{k} tokens
         semantic_ids_per_item: int N (length of every semantic id list)
         resolve_collisions: if True, items whose SEM tuple collides with an earlier
-            item get one randomly-chosen position re-drawn until the tuple is unique.
-            This preserves semantic structure for non-colliding items (~80%) while
-            guaranteeing all items are reachable via the reverse map.
+            item get their last position (the most fine-grained / least semantic
+            code in the hierarchy) re-drawn until the tuple is unique. Earlier
+            positions — which carry the coarse-grained semantic meaning — are
+            never touched, so collision resolution does not corrupt semantic
+            structure for any item, colliding or not.
     """
 
     def __init__(
@@ -38,12 +40,27 @@ class SemanticVocab:
 
         sem_prefix = PathLanguageModelingTokenType.SEMANTIC.token
 
-        # Collect all valid SEM token IDs from the tokenizer vocabulary (needed for
-        # collision resolution — these are the only codes the model knows about).
-        valid_sem_token_ids: List[int] = [
-            tid for tok, tid in tokenizer.get_vocab().items()
-            if tok.startswith(sem_prefix)
-        ]
+        # Collect, per position, the SEM token IDs that are valid to perturb into
+        # (needed for collision resolution — these are the only codes the model
+        # knows about). In layered mode each position has its own codebook
+        # (SEM_{level}_{code}), so a token from level 1 must never be perturbed
+        # into position 0 — that would silently break the level structure that
+        # the rest of the vocab assumes. In flat mode every position shares the
+        # same SEM{code} codebook.
+        if layered:
+            valid_sem_token_ids_per_level: List[List[int]] = [
+                [
+                    tid for tok, tid in tokenizer.get_vocab().items()
+                    if tok.startswith(f"SEM_{level}_")
+                ]
+                for level in range(self._semantic_ids_per_item)
+            ]
+        else:
+            shared_valid_sem_token_ids = [
+                tid for tok, tid in tokenizer.get_vocab().items()
+                if tok.startswith(sem_prefix)
+            ]
+            valid_sem_token_ids_per_level = [shared_valid_sem_token_ids] * self._semantic_ids_per_item
 
         for item_id, codes in semantic_id_mapping.items():
             token_ids: List[int] = []
@@ -63,11 +80,12 @@ class SemanticVocab:
 
             self.item_to_token_ids[int(item_id)] = token_ids
 
-        # Build reverse map; optionally resolve collisions by perturbing one
-        # randomly-chosen position of the colliding item until the tuple is unique.
+        # Build reverse map; optionally resolve collisions by perturbing only the
+        # last position (least semantic) of the colliding item until unique.
         self.token_ids_to_item: Dict[Tuple[int, ...], int] = {}
         n_collisions = 0
         n_resolved = 0
+        last_pos = self._semantic_ids_per_item - 1
 
         for item_id, tids in self.item_to_token_ids.items():
             key = tuple(tids)
@@ -81,12 +99,24 @@ class SemanticVocab:
                 self.token_ids_to_item[key] = item_id
                 continue
 
-            # Resolve: randomly perturb one position at a time until unique.
+            # Resolve: sweep every code at the last position (shuffled) until the
+            # tuple is unique. Positions before the last are never touched, since
+            # they carry the coarse-grained semantic meaning.
+            #
+            # The shuffle is seeded per-item (not from the global `random` state) so
+            # that resolution is 100% reproducible across independent processes
+            # regardless of what else runs before this — e.g. pretrain and finetune
+            # each build their own SemanticVocab from the same .semanticids file, and
+            # the pretrain->finetune weight transfer (SPRIG.__init__'s wte copy) only
+            # makes sense if a colliding item resolves to the exact same token in both.
+            # Depending on global `random` state being aligned between two separate
+            # process runs is fragile; keying the RNG on item_id removes that
+            # dependency entirely.
+            candidates = list(valid_sem_token_ids_per_level[last_pos])
+            random.Random(item_id).shuffle(candidates)
             resolved = list(tids)
-            max_attempts = len(valid_sem_token_ids) * self._semantic_ids_per_item * 10
-            for _ in range(max_attempts):
-                pos = random.randrange(self._semantic_ids_per_item)
-                resolved[pos] = random.choice(valid_sem_token_ids)
+            for candidate_token in candidates:
+                resolved[last_pos] = candidate_token
                 candidate = tuple(resolved)
                 if candidate not in self.token_ids_to_item:
                     self.token_ids_to_item[candidate] = item_id
@@ -94,11 +124,13 @@ class SemanticVocab:
                     n_resolved += 1
                     break
             else:
-                # Extremely unlikely with a large codebook; fall back to last-wins.
+                # Every code at the last position is already taken by some other
+                # item sharing this item's prefix; fall back to last-wins.
                 logger.warning(
-                    "SemanticVocab: could not resolve collision for item %d after %d attempts; "
+                    "SemanticVocab: could not resolve collision for item %d; "
+                    "all %d codes at the last position are taken for this prefix; "
                     "item remains shadowed.",
-                    item_id, max_attempts,
+                    item_id, len(candidates),
                 )
                 self.token_ids_to_item[tuple(tids)] = item_id
 

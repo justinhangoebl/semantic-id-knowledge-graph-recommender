@@ -3,7 +3,12 @@ from hopwise.model.path_language_modeling_recommender.pearlm import PEARLM
 from hopwise.model.path_language_modeling_recommender.pearlmgpt2 import PEARLMGPT2
 from hopwise.model.path_language_modeling_recommender.pearlmllama2 import PEARLMLlama2
 from hopwise.model.path_language_modeling_recommender.pearlmllama3 import PEARLMLlama3
+from hopwise.model.path_language_modeling_recommender.pearlmllama import PEARLMLlama
 from hopwise.model.path_language_modeling_recommender.plm import PLM
 from hopwise.model.path_language_modeling_recommender.sprig import SPRIG
 from hopwise.model.path_language_modeling_recommender.sprigl import SPRIGL
+from hopwise.model.path_language_modeling_recommender.spriglc import SPRIGLC
+from hopwise.model.path_language_modeling_recommender.sprigt import SPRIGT
+from hopwise.model.path_language_modeling_recommender.sprigr import SPRIGR
+from hopwise.model.path_language_modeling_recommender.spriglr import SPRIGLR
 from hopwise.model.path_language_modeling_recommender.boostedsprig import BoostedSPRIG, BoostedSPRIGL

@@ -67,6 +67,20 @@ class SPRIG(PEARLM):
             persistent=False,
         )
 
+        # Precompute the "non-informative" special IDs (BOS, EOS, user token) that
+        # _mask_labels_to_terminal also excludes from the finetune loss.
+        user_prefix = PathLanguageModelingTokenType.USER.token
+        user_ids = (
+            tid for tok, tid in dataset.tokenizer.get_vocab().items()
+            if tok.startswith(user_prefix)
+        )
+        non_informative_ids = sorted({dataset.tokenizer.bos_token_id, dataset.tokenizer.eos_token_id, *user_ids})
+        self.register_buffer(
+            "_non_informative_token_ids",
+            torch.tensor(non_informative_ids, dtype=torch.long),
+            persistent=False,
+        )
+
         # Label smoothing is required for both pretrain and finetune.
         # KGGLM does not need this because each item has a unique token.
         # SPRIG's SEM codes are shared across items (aliasing), so the model
@@ -175,8 +189,12 @@ class SPRIG(PEARLM):
         # Intermediate SEM positions: SEM tokens that are NOT in the terminal block.
         intermediate_sem = is_sem & ~terminal_sem                    # (B, T)
 
+        # BOS / EOS / user token positions carry no target-item signal.
+        is_non_informative = torch.isin(input_ids, self._non_informative_token_ids)  # (B, T)
+
         masked = labels.clone()
         masked[intermediate_sem] = -100
+        masked[is_non_informative] = -100
         return masked
 
     def forward(
