@@ -130,8 +130,7 @@ conversion_tools/
 *.jpg
 
 sig_scores/
-tests/
 .pre-commit-config.yaml
 cold_start_eval.py
 .github/
-run_test.sh/
+run_test.sh
