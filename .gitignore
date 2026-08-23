@@ -24,6 +24,8 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+./cold_start_eval.py
+
 
 # Unit test / coverage reports
 *.html
