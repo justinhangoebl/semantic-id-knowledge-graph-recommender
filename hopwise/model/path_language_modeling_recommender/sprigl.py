@@ -41,8 +41,11 @@ class SPRIGL(SPRIG):
             topk=config["topk"],
         )
 
-        # Attach the grammar logits processor to the generation pipeline.
-        # SPRIG.__init__ leaves logits_processor_list empty; we add one entry.
+        # Attach the grammar and self-avoidance logits processors to the generation
+        # pipeline. SPRIG.__init__ leaves logits_processor_list empty; we populate it here.
         self.logits_processor_list = [
-            self.sequence_postprocessor.grammar_processor
+            self.sequence_postprocessor.grammar_processor,
+            self.sequence_postprocessor.path_self_avoidance_processor,
         ]
+        if config["history_exclusion"]:
+            self.logits_processor_list.append(self.sequence_postprocessor.history_exclusion_processor)

@@ -13,7 +13,10 @@ Only the finetune stage needs to be run with model: BoostedSPRIG[L].
 
 Config keys
 -----------
-sem_preference_alpha : float  weight of the preference prior (default 0.5).
+sem_preference_alpha   : float  weight of the self-only preference prior (default 0.5).
+sem_preference_cf_beta : float  weight of the cross-user code-co-occurrence term
+                                 blended into the prior, 0..1 (default 0.0 — off,
+                                 exactly reproduces the self-only-only behavior).
 """
 
 from hopwise.model.path_language_modeling_recommender.sprig import SPRIG
@@ -29,6 +32,7 @@ def _build_preference_processor(model, config, dataset):
         N=int(dataset.semantic_ids_per_item),
         vocab_size=len(dataset.tokenizer.get_vocab()),
         alpha=config["sem_preference_alpha"] or 0.5,
+        beta=config["sem_preference_cf_beta"] or 0.0,
     )
 
 

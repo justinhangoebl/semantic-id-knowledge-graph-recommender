@@ -522,6 +522,7 @@ class KnowledgePathDataset(KnowledgeBasedDataset):
             user_num=self.user_num,
             item_num=self.item_num,
             max_paths_per_user=self.max_paths_per_user,
+            max_consecutive_invalid=self.max_consecutive_invalid,
             collaborative_path=self.collaborative_path,
         )
 
@@ -981,6 +982,7 @@ def _generate_user_paths_all_simple_per_user_and_positive(graph, used_ids, **kwa
     user_num = kwargs.pop("user_num", None)
     item_num = kwargs.pop("item_num", None)
     max_paths_per_user = kwargs.pop("max_paths_per_user", None)
+    max_consecutive_invalid = kwargs.pop("max_consecutive_invalid", None)
     collaborative_path = kwargs.pop("collaborative_path", None)
 
     # Pre-compute vertex type lookup arrays once — avoids np.array() creation
@@ -990,19 +992,74 @@ def _generate_user_paths_all_simple_per_user_and_positive(graph, used_ids, **kwa
     _n = len(graph.vs)
     _is_item = np.zeros(_n, dtype=bool)
     _is_item[graph_min_iid : graph_max_iid + 1] = True
+    _is_user = np.zeros(_n, dtype=bool)
+    _is_user[:user_num] = True
 
-    def _is_valid(path):
-        if path[0] >= graph_min_iid:          # must start with user
-            return False
-        if not _is_item[path[1]]:              # 2nd node must be item
-            return False
-        if not _is_item[path[-1]]:             # last node must be item
-            return False
-        if not collaborative_path:
-            for v in path[2:-1]:               # no user nodes in the middle
-                if v < graph_min_iid:
-                    return False
-        return True
+    # Pre-compute typed adjacency in CSR format once in the main process, the same
+    # way constrained-rw does. igraph's get_all_simple_paths exhaustively enumerates
+    # *every* simple path between a user and a target item before any filtering or
+    # early-exit can happen — with a handful of hops in a moderately connected KG
+    # that count explodes combinatorially, which is what made this strategy take
+    # tens of hours even when only 1-2 paths per user are actually kept. The DFS
+    # below walks the same CSR adjacency but stops as soon as it has found enough
+    # valid paths, and is bounded by max_expansions so a target with no or few
+    # reachable paths can't make a single search run away either.
+    def _build_csr(predicate):
+        ptrs = np.zeros(_n + 1, dtype=np.int64)
+        rows = []
+        for v in range(_n):
+            nbs = [nb for nb in graph.neighbors(v) if predicate(nb) and nb != v]
+            ptrs[v + 1] = ptrs[v] + len(nbs)
+            rows.extend(nbs)
+        return np.array(rows, dtype=np.int32), ptrs
+
+    # 2nd node in the path (right after the user) must be an item.
+    _adj_first_data, _adj_first_ptr = _build_csr(lambda nb: _is_item[nb])
+    # Subsequent hops: any node, unless collaborative_path is disabled, in which
+    # case user nodes are not allowed in the middle of the path.
+    if collaborative_path:
+        _adj_body_data, _adj_body_ptr = _build_csr(lambda nb: True)
+    else:
+        _adj_body_data, _adj_body_ptr = _build_csr(lambda nb: not _is_user[nb])
+
+    cutoff = path_hop_length + 1
+    max_expansions = max(500, 50 * cutoff)
+
+    def _random_simple_paths(start, target, max_count):
+        """Randomized, budgeted DFS collecting up to `max_count` simple paths
+        from `start` to `target` of at most `cutoff` edges."""
+        results = []
+        visited = {start}
+        path = [start]
+        expansions = 0
+
+        def backtrack(node, depth):
+            nonlocal expansions
+            if len(results) >= max_count or expansions >= max_expansions or depth == cutoff:
+                return
+
+            ptr, data = (_adj_first_ptr, _adj_first_data) if depth == 0 else (_adj_body_ptr, _adj_body_data)
+            neighbors = data[ptr[node] : ptr[node + 1]].tolist()
+            random.shuffle(neighbors)
+
+            for nb in neighbors:
+                if len(results) >= max_count or expansions >= max_expansions:
+                    return
+                if nb in visited:
+                    continue
+
+                expansions += 1
+                path.append(nb)
+                if nb == target:
+                    results.append(tuple(path))
+                else:
+                    visited.add(nb)
+                    backtrack(nb, depth + 1)
+                    visited.remove(nb)
+                path.pop()
+
+        backtrack(start, 0)
+        return results
 
     def process_user(u):
         user_paths = set()
@@ -1013,24 +1070,20 @@ def _generate_user_paths_all_simple_per_user_and_positive(graph, used_ids, **kwa
 
         pos_iid += user_num
 
+        consecutive_invalid = 0
         for target_item in pos_iid:
-            user_path_sample_size = 0
-
-            generated_paths = graph.get_all_simple_paths(u, to=target_item, cutoff=path_hop_length + 1, mode="all")
-            random.shuffle(generated_paths)
-
-            for full_path in generated_paths:
-                if _is_valid(full_path):
-                    path_tuple = tuple(full_path)
-                    if path_tuple not in user_paths:
-                        user_paths.add(path_tuple)
-                        user_path_sample_size += 1
-
-                if user_path_sample_size == max_paths_per_user:
-                    break
-
-            if len(user_paths) >= max_paths_per_user:
+            remaining = max_paths_per_user - len(user_paths)
+            if remaining <= 0:
                 break
+
+            found_paths = _random_simple_paths(u, int(target_item), remaining)
+            if found_paths:
+                user_paths.update(found_paths)
+                consecutive_invalid = 0
+            else:
+                consecutive_invalid += 1
+                if consecutive_invalid >= max_consecutive_invalid:
+                    break
 
         return user_paths
 

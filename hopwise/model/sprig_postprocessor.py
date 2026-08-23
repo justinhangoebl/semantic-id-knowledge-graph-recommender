@@ -20,12 +20,46 @@ class SPRIGSemanticPreferenceLogitsProcessor(LogitsProcessor):
     beams would be discarded post-generation anyway; redirecting them early
     gives the full beam budget to novel items.
 
-    Semantic preference boosting (depth 0..N-1)
-    --------------------------------------------
-    At block position k, adds a scaled prior toward the SEM token IDs that
-    appeared at depth k across the user's history items.  This injects a
-    per-user "SEM code profile" — a lightweight collaborative-filtering signal
-    at the token level that generalises across semantically similar items.
+    Semantic preference boosting (depth 0..N-2, NOT the final depth)
+    ------------------------------------------------------------------
+    At block position k < N-1, adds a scaled prior toward the SEM token IDs
+    that appeared at depth k across the user's history items.  This injects a
+    per-user "SEM code profile" — built solely from that user's own history,
+    not from other users, so it is a personalization signal rather than a
+    collaborative-filtering one.  It still generalises beyond the user's exact
+    seen items, because the shared codebook means boosting a code also lifts
+    other items that happen to share it, even ones this user never interacted
+    with — that generalisation is across semantically similar *items* via
+    code sharing, not across users.
+
+    Deliberately excluded from the boost: depth N-1. By the final SEM
+    position, the already-chosen prefix has narrowed the reachable-item set
+    down to (near-)one specific item, so a preference prior there stops being
+    "steer toward the user's taste neighborhood" and becomes "reward
+    regenerating an item already in this user's history" — directly undoing
+    the history-blocking half of this same processor, which exists precisely
+    to keep beams away from fully-seen regions. Boosting only depths < N-1
+    keeps the steering coarse (cluster/neighborhood-level) and leaves the
+    fine-grained, item-identifying choice unbiased.
+
+    Cross-user (collaborative) extension via code co-occurrence
+    -------------------------------------------------------------
+    The self-only profile above is a repetition signal, not a collaborative
+    one — no other user's behavior enters it. ``beta`` blends in a genuine
+    cross-user term: a population-level code-co-occurrence table (built once
+    from every user's history, not just this one) is used to propagate this
+    user's own code weights one hop through "codes that tend to co-occur with
+    codes I already have, across everyone" (see ``_code_cooc`` / ``_cf_pref``).
+    ``beta=0`` (default) recovers the exact single-user behavior above;
+    higher ``beta`` weights the population signal more. Bounded by codebook
+    size squared per depth, not catalog size, so it stays cheap regardless of
+    how many items exist. Also depth-capped the same way as the self-only
+    boost, for the same reason (never reach the item-identifying final SEM
+    position), and filtered to drop any propagated code whose full reachable
+    item set is already covered by this user's history (same criterion the
+    depth-0 hard mask below already computes, generalised across depths via
+    ``_tok_to_items_by_depth``) so it doesn't just re-derive "recommend what
+    you've already seen" through a population detour.
 
     Args:
         semantic_vocab : SemanticVocab with item_to_token_ids populated.
@@ -33,13 +67,26 @@ class SPRIGSemanticPreferenceLogitsProcessor(LogitsProcessor):
         tokenizer      : dataset tokenizer (to decode U_X token → uid integer).
         N              : semantic_ids_per_item.
         vocab_size     : total tokenizer vocabulary size.
-        alpha          : weight of the preference prior added to logits (default 0.5).
+        alpha          : weight of the self-only preference prior (default 0.5).
+        beta           : weight of the cross-user co-occurrence term blended
+                         into the self-only prior, 0..1 (default 0.0 — off,
+                         exactly reproduces prior single-user-only behavior).
     """
 
-    def __init__(self, semantic_vocab, used_ids, tokenizer, N: int, vocab_size: int, alpha: float = 0.5):
+    def __init__(
+        self,
+        semantic_vocab,
+        used_ids,
+        tokenizer,
+        N: int,
+        vocab_size: int,
+        alpha: float = 0.5,
+        beta: float = 0.0,
+    ):
         self.N = N
         self.vocab_size = vocab_size
         self.alpha = alpha
+        self.beta = beta
 
         user_prefix = PathLanguageModelingTokenType.USER.token
         sem_prefix = PathLanguageModelingTokenType.SEMANTIC.token
@@ -59,13 +106,16 @@ class SPRIGSemanticPreferenceLogitsProcessor(LogitsProcessor):
             if tok.startswith(sem_prefix)
         )
 
-        # ── first_tok_to_items[t] = frozenset of item IDs reachable via SEM[0]==t
-        first_tok_to_items: dict[int, set[int]] = defaultdict(set)
+        # ── tok_to_items_by_depth[d][t] = frozenset of item IDs whose depth-d code is t
+        tok_to_items_by_depth: list[dict[int, set[int]]] = [defaultdict(set) for _ in range(N)]
         for item_id, tids in semantic_vocab.item_to_token_ids.items():
-            first_tok_to_items[tids[0]].add(int(item_id))
-        self._first_tok_to_items: dict[int, frozenset[int]] = {
-            k: frozenset(v) for k, v in first_tok_to_items.items()
-        }
+            for d, tid in enumerate(tids[:N]):
+                tok_to_items_by_depth[d][int(tid)].add(int(item_id))
+        self._tok_to_items_by_depth: list[dict[int, frozenset[int]]] = [
+            {k: frozenset(v) for k, v in level.items()} for level in tok_to_items_by_depth
+        ]
+        # depth-0 view, kept under its old name for the hard-mask code below
+        self._first_tok_to_items: dict[int, frozenset[int]] = self._tok_to_items_by_depth[0]
 
         # ── per-user item history (for history blocking) ──────────────────────
         self._history: dict[int, frozenset[int]] = {
@@ -90,14 +140,68 @@ class SPRIGSemanticPreferenceLogitsProcessor(LogitsProcessor):
                 depth_pref.append({k: v / total for k, v in depth_counts[d].items()})
             self._pref[uid] = depth_pref
 
+        # ── population-level code co-occurrence (cross-user signal) ───────────
+        # code_cooc[d][c1][c2] = count of times codes c1 and c2 (distinct) both
+        # appeared at depth d across two different items in the SAME user's
+        # history, summed over ALL users. Bounded by (codes-per-depth)^2, not
+        # catalog size, since it's a code x code table, not an item x item one.
+        code_cooc: list[defaultdict] = [defaultdict(lambda: defaultdict(float)) for _ in range(N)]
+        if beta > 0.0:
+            for uid in range(len(used_ids)):
+                item_codes = [
+                    semantic_vocab.item_to_token_ids[i][:N]
+                    for i in used_ids[uid]
+                    if i in semantic_vocab.item_to_token_ids
+                ]
+                for d in range(N):
+                    codes_at_d = {int(tids[d]) for tids in item_codes}
+                    for c1 in codes_at_d:
+                        for c2 in codes_at_d:
+                            if c1 != c2:
+                                code_cooc[d][c1][c2] += 1.0
+        self._code_cooc: list[dict[int, dict[int, float]]] = [
+            {c1: dict(c2s) for c1, c2s in level.items()} for level in code_cooc
+        ]
+
         # ── device cache: (uid, depth, device_str) → FloatTensor (V,) ────────
         self._pref_cache: dict = {}
+
+    def _cf_pref(self, uid: int, depth: int) -> dict[int, float]:
+        """One-step collaborative diffusion: propagate this user's own code
+        weights through the population code-co-occurrence table, i.e. "codes
+        that tend to co-occur (across everyone) with codes this user already
+        has" — the cross-user counterpart to the self-only ``_pref`` above.
+        """
+        out: defaultdict = defaultdict(float)
+        for c, w in self._pref[uid][depth].items():
+            neighbors = self._code_cooc[depth].get(c)
+            if not neighbors:
+                continue
+            total = sum(neighbors.values()) or 1.0
+            for c2, count in neighbors.items():
+                out[c2] += w * (count / total)
+        return dict(out)
 
     def _pref_tensor(self, uid: int, depth: int, device: torch.device) -> torch.Tensor:
         key = (uid, depth, str(device))
         if key not in self._pref_cache:
+            blended = self._pref[uid][depth]
+            if self.beta > 0.0:
+                history = self._history.get(uid, frozenset())
+                cf_pref = {
+                    c: w
+                    for c, w in self._cf_pref(uid, depth).items()
+                    # drop codes that would just re-derive "recommend an already-seen item"
+                    if not (self._tok_to_items_by_depth[depth].get(c, frozenset()) <= history)
+                }
+                keys = set(blended) | set(cf_pref)
+                blended = {
+                    c: (1 - self.beta) * blended.get(c, 0.0) + self.beta * cf_pref.get(c, 0.0)
+                    for c in keys
+                }
+
             t = torch.zeros(self.vocab_size, dtype=torch.float32, device=device)
-            for tok_id, weight in self._pref[uid][depth].items():
+            for tok_id, weight in blended.items():
                 if tok_id < self.vocab_size:
                     t[tok_id] = weight
             self._pref_cache[key] = t
@@ -131,8 +235,9 @@ class SPRIGSemanticPreferenceLogitsProcessor(LogitsProcessor):
             if uid is None:
                 continue
 
-            # ── semantic preference boost ─────────────────────────────────────
-            scores[i] += self.alpha * self._pref_tensor(uid, depth, device)
+            # ── semantic preference boost (coarse depths only, see class docstring) ──
+            if depth < self.N - 1:
+                scores[i] += self.alpha * self._pref_tensor(uid, depth, device)
 
             # ── history blocking (depth 0 only) ───────────────────────────────
             if depth == 0:

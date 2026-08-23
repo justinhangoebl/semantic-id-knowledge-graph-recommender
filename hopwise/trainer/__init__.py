@@ -21,6 +21,10 @@ __all__ = [
     "KGGLMTrainer",
     "SPRIGTrainer",
     "SPRIGLTrainer",
+    "SPRIGTTrainer",
+    "SPRIGRTrainer",
+    "SPRIGLRTrainer",
     "BoostedSPRIGTrainer",
     "BoostedSPRIGLTrainer",
+    "SPRIGLCTrainer",
 ]

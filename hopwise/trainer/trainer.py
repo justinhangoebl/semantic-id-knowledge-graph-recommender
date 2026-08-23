@@ -1986,6 +1986,7 @@ class HFPathLanguageModelingTrainer(ExplainableTrainer):
             per_device_train_batch_size=self.config["train_batch_size"],
             per_device_eval_batch_size=self.test_batch_size,
             warmup_steps=self.config["warmup_steps"],
+            lr_scheduler_type=self.config["lr_scheduler_type"] or "linear",
             save_steps=self.eval_step,
             save_total_limit=1,
             load_best_model_at_end=True,
@@ -2235,9 +2236,43 @@ class SPRIGLTrainer(SPRIGTrainer):
     pass
 
 
+class SPRIGTTrainer(SPRIGLTrainer):
+    r"""SPRIGTTrainer is designed for SPRIGT, the relation-free variant of SPRIGL.
+    Training stages and checkpointing are identical to SPRIGL.
+    """
+
+    pass
+
+
+class SPRIGRTrainer(SPRIGTrainer):
+    r"""SPRIGRTrainer is designed for SPRIGR, the RoPE-backbone variant of SPRIG.
+    Training stages and checkpointing are identical to SPRIG.
+    """
+
+    pass
+
+
+class SPRIGLRTrainer(SPRIGRTrainer):
+    r"""SPRIGLRTrainer is designed for SPRIGLR, the layered-semantic-ID variant of
+    SPRIGR (RoPE-backbone counterpart of SPRIGLTrainer). Training stages and
+    checkpointing are identical to SPRIGR.
+    """
+
+    pass
+
+
 class BoostedSPRIGTrainer(SPRIGTrainer):
     pass
 
 
 class BoostedSPRIGLTrainer(SPRIGLTrainer):
+    pass
+
+
+class SPRIGLCTrainer(SPRIGLTrainer):
+    r"""SPRIGLCTrainer is designed for SPRIGLC, SPRIGL plus a cross-user
+    coverage-penalty logits processor. Training stages and checkpointing are
+    identical to SPRIGL; only inference-time decoding differs.
+    """
+
     pass

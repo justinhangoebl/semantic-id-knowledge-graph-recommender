@@ -29,8 +29,8 @@ transform: ~                    # (str) The transform operation for batch data p
 
 
 repeatable: False               # (bool) Whether to evaluate results with a repeatable recommendation scene.
-metrics: ["Recall","MRR","NDCG","Hit","Precision"]  # (list or str) Evaluation metrics.
-topk: [10]                      # (list or int or None) The value of k for topk evaluation metrics.
+metrics: ["Recall","MRR","NDCG","Hit","Precision","ItemCoverage","Novelty","Serendipity","GiniIndex"]  # (list or str) Evaluation metrics.
+topk: [5, 10, 20]                      # (list or int or None) The value of k for topk evaluation metrics.
 valid_metric: NDCG@10           # (str) The evaluation metric for early stopping.
 valid_metric_bigger: True       # (bool) Whether to take a bigger valid metric value as a better result.
 
@@ -82,7 +82,7 @@ ui_relation: "[UI-Relation]"    # (str) Name assigned to the interaction relatio
 kg_reverse_r: False             # (bool) Whether to reverse relations of triples for bidirectional edges.
 
 # Knowledge Path Sampling-based Model Needed
-context_length: 27               # (int) Maximum length of the context. Set to (path_hop_length * 2) + 1 (U) + 2 (BOS/EOS) by default.
+context_length: 25               # (int) Maximum length of the context. Set to (path_hop_length * 2) + 1 (U) + 2 (BOS/EOS) by default.
 metapaths: ~                    # (list) Metapaths used to sample paths.
 tokenizer:                      # (dict) Tokenizer parameters.
     model: WordLevel            # (str) Tokenizer model.
@@ -116,9 +116,9 @@ embedding_size: 768             # (int) Size of the embeddings.
 num_heads: 12                   # (int) Number of heads in the multi-head attention.
 num_layers: 6                   # (int) Number of layers in the transformer.
 path_hop_length: 3              # (int) Number of hops for finetune constrained-rw (pretrain uses pretrain_hop_length).
-MAX_PATHS_PER_USER: 100        # (int) Maximum number of kg sampled paths per user.
+MAX_PATHS_PER_USER: 250        # (int) Maximum number of kg sampled paths per user.
 pretrain_epochs: 3              # (int) Number of epochs for pre-training.
-epochs: 10                       # (int) The number of training epochs.
+epochs: 3                       # (int) The number of training epochs.
 train_batch_size: 256           # (int) The training batch size.
 eval_batch_size: 128           # (int) The evaluation batch size.
 save_step: 50                   # (int) Number of steps to save the model during pre-training.
@@ -130,37 +130,34 @@ sequence_postprocessor: BeamSearch
 eval_args:                      # (dict) 4 keys: group_by, order, split, and mode
   split: {'RS':[0.6,0.2,0.2]}   # (dict) The splitting strategy ranging in ['RS','LS'].
   group_by: user                # (str) The grouping strategy ranging in ['user', 'none'].
-  order: RO                     # (str) The ordering strategy ranging in ['RO', 'TO'].
+  order: TO                     # (str) The ordering strategy ranging in ['RO', 'TO'].
   mode: full                    # (str) The evaluation mode ranging in ['full','unixxx','popxxx','labeled'].
 
 # SPRIG.yaml
-gpu_id: '5'                                         # (str) The id of GPU device(s).
+gpu_id: '0'                                         # (str) The id of GPU device(s).
 
-wandb_project: 'SPRIG - ml1m' # (str) The project name in W&B.            ml1m
-#wandb_project: 'SPRIG - lfm' # (str) The project name in W&B.            ml1m
+wandb_project: '' # - cold' # (str) The project name in W&B.            ml1m
 
 train_stage: 'pretrain'                            # (str) The training stage. Range in ['pretrain', 'finetune'].
 pre_model_path: ''                                 # (str) The path of pretrained model.
 
-train_stage: 'finetune'                            # (str) The training stage. Range in ['pretrain', 'finetune'].
-pre_model_path: './saved/huggingface-distilgpt2-SPRIG-ml1m-pretrained-3-May-25-2026_11-19-37.pth/checkpoint-80592/'      # (str) The path of pretrained model. ml1m
-#pre_model_path: './saved/huggingface-distilgpt2-SPRIG-lfm-pretrained-3-May-27-2026_02-07-00.pth/checkpoint-131283/'      # (str) The path of pretrained model. ml1m
+learning_rate: 1e-6             # (float) Learning rate for optimizer.
+weight_decay: 0.01              # (float) Weight decay for optimizer.
+warmup_steps: 250               # (int) Number of warmup steps for learning rate scheduler.
+lr_scheduler_type: cosine       # (str) HF TrainingArguments schedule; was implicit "linear" default, decaying to ~0 by end of pretrain_epochs.
 
-learning_rate: 1e-6             # (float) Learning rate for optimizer.                      lfm
-weight_decay: 0.01              # (float) Weight decay for optimizer.                       lfm
-warmup_steps: 500               # (int) Number of warmup steps for learning rate scheduler. lfm
-
-quantization_method: rkmeans
+quantization_method: rqvae
 semantic_ids_per_item: 3
-layered_semantic_ids: False         # flat SEM tokens (use SPRIGL for layered)
+layered_semantic_ids: True
+resolve_semantic_id_collisions: True  # (bool) if True, re-draw one code position for colliding items until unique, instead of last-wins
 use_kg_token_types: False
+history_exclusion: True  # (bool) block SEM-block candidates during beam search whose full reachable item set is already in the user's train-history (HistoryExclusionLogitsProcessor). Set False to ablate against the no-steering baseline.
 clip_grad_norm: 
-    max_norm: 1.0                # (float) Maximum norm for gradient clipping.
-learner: adamW                  # (str) The name of used optimizer.
+  max_norm: 1                            # (float) Maximum norm of the gradients.
 
 path_generation_args:
-    paths_per_user: 30         # (int) Number of paths generated per user.
-    num_beams: 50               # (int) Number of beams for beam search.
+    paths_per_user: 50          # (int) Number of paths generated per user.
+    num_beams: 60               # (int) Number of beams for beam search.
     num_beam_groups: 5          # (int) Number of groups for diverse beam search.
     diversity_penalty: 0.3      # (float) Diversity penalty for beam search.
     length_penalty: 0.0         # (float) Length penalty for beam search.
@@ -174,12 +171,12 @@ path_sample_args:
     path_token_separator: " "   # (str) Token separator for paths.
 
     # finetune only
-    temporal_causality: True   # (bool) Whether to use temporal causality.
+    temporal_causality: False   # (bool) Whether to use temporal causality.
     collaborative_path: False    # (bool) Whether to include users in sampled paths.
     #restrict_by_phase=False with TO — allow finetune paths to end at any item. The model retains broad SEM code coverage and the temporal split no longer hurts. The downside is paths may not be grounded in actual user-item interactions at the terminal hop.
-    restrict_by_phase: False    # (bool) Whether to restrict the last item in the reasoning path by the used ids in the dataloader phase (for fine-tuning, set True).
+    restrict_by_phase: True    # (bool) Whether to restrict the last item in the reasoning path by the used ids in the dataloader phase (for fine-tuning, set True).
     strategy: constrained-rw    # (str) Strategy for sampling paths.
-    MAX_CONSECUTIVE_INVALID: 10 # (int) Maximum number of consecutive invalid paths per user.
+    MAX_CONSECUTIVE_INVALID: 100 # (int) Maximum number of consecutive invalid paths per user.
     MAX_RW_PATHS_PER_HOP: 100    # (int) Maximum number of paths sampled at each hop for constrained random walk.
     parallel_max_workers: 1    # (int) Maximum number of workers for parallel processing.
 

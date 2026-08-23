@@ -66,47 +66,82 @@ uv sync
 
 ---
 
-## Reproducing Results
+## Quickstart
 
-### 1. Generating Semantic IDs
+This walks through the full pipeline for the `ml1m` dataset: fetching the dataset files, generating semantic IDs, pretraining, and finetuning. All commands are run from the repository root unless noted otherwise. To run the 'onion' dataset change the dataset name in the corresponding commands.
 
-Semantic IDs must be generated before training. The `.semanticids` file maps each dataset item ID to a tuple of integer codes. Two generation methods are supported: RQ-VAE (preferred, produces contiguous coverage) and k-means over KG entity embeddings.
+### 1. Download the datasets
 
-The file format is a CSV with columns `item_id` and `semantic_ids`:
+Download the dataset from [this Google Drive folder](https://drive.google.com/drive/folders/16kuU39i-5CAUk_l6yXLfX-fL6ftKeh-q?usp=sharing) and place the contents under `dataset/`, e.g.:
 
 ```
-item_id,semantic_ids
-1,"[42, 17, 93]"
-2,"[42, 17, 8]"
-3,"[11, 200, 93]"
+dataset/ml1m/ml1m.inter
+dataset/ml1m/ml1m.item
+dataset/ml1m/ml1m.kg
+dataset/ml1m/ml1m.link
+dataset/ml1m/ml1m.semanticids
 ```
 
-Item IDs must match the hopwise-internal item IDs for the specific dataset and filter configuration being used. If you change `user_inter_num_interval` or `item_inter_num_interval`, the semantic IDs file must be regenerated.
+These files must also persist in the quantization subproject called 'sem-id-gen/':
 
-Place the file at `dataset/<dataset_name>/<dataset_name>.semanticids`.
+```
+sem-id-gen/dataset/ml1m/raw/ml1m.item
+sem-id-gen/dataset/ml1m/raw/ml1m.user
+sem-id-gen/dataset/ml1m/raw/ml1m.inter
+sem-id-gen/dataset/ml1m/raw/ml1m.kg
+sem-id-gen/dataset/ml1m/raw/ml1m.link
+```
 
-### 2. Pretraining
+### 2. Generate semantic IDs (`sem-id-gen/`)
+
+Semantic IDs are trained separately from hopwise, in the `sem-id-gen/` subproject. It fits a quantization model (RQ-VAE by default) over item embeddings and emits a `.semanticids` file mapping each item ID to a tuple of integer codes.
 
 ```sh
-hopwise train --model SPRIG --dataset ml1m \
-    --config_files hopwise/properties/model/SPRIG.yaml \
-    train_stage=pretrain
+cd sem-id-gen
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
+pip install numpy pandas scikit-learn matplotlib torch_geometric einops polars wandb sentence-transformers hydra-core datasets accelerate transformers dotenv pytest tqdm
+
+# 2a. Train the quantizer (writes models/ml1m_item_rvq.pt)
+python main.py --config config/config_ml1m_item.yaml
+
+# 2b. Encode every item into semantic IDs (writes outputs/ml1m_semids.pt / .csv)
+python generate_semids.py \
+    --config config/config_ml1m_item.yaml \
+    --model_path models/ml1m_item_rvq.pt \
+    --output_path outputs/ml1m_semids.pt
+cd ..
 ```
 
-### 3. Finetuning
+Copy the resulting `outputs/ml1m_semids.csv` into `dataset/ml1m/ml1m.semanticids`, overwriting the one from step 1.
+
+### 3. Pretrain
+
+`hopwise/properties/model/SPRIGL.yaml` already ships with `train_stage: 'pretrain'`, so no `--config_files` override is needed — the CLI picks it up automatically from the model name:
+
+The distinction between SPRIGL and SPRIG, is the usage of Layered Semantic IDs. SPRIGL are the reported results in the paper.
 
 ```sh
-hopwise train --model SPRIG --dataset ml1m \
-    --config_files hopwise/properties/model/SPRIG.yaml \
-    train_stage=finetune \
-    pre_model_path=saved/<pretrained_checkpoint>/
+uv run hopwise train --model SPRIGL --dataset ml1m
 ```
 
----
+This runs the entity-random-walk pretraining stage and periodically checkpoints to `saved/`, e.g. `saved/huggingface-distilgpt2-SPRIGL-ml1m-pretrained-3.pth/checkpoint-<step>/`.
 
-## Datasets
+### 4. Finetune
 
-The MovieLens-1M and Last.FM-1M datasets used in these experiments are available from the [hopwise Google Drive](https://drive.google.com/drive/folders/1Zv57Xfo3mC2DemQbHf5XkYKBluRALQNm?usp=drive_link), as distributed by the upstream hopwise project.
+Edit [hopwise/properties/model/SPRIGL.yaml](hopwise/properties/model/SPRIGL.yaml) and set:
+
+```yaml
+train_stage: 'finetune'
+pre_model_path: 'saved/huggingface-distilgpt2-SPRIGL-ml1m-pretrained-3.pth/checkpoint-<step>/'
+```
+
+using the checkpoint directory produced in step 3, then rerun the same command:
+
+```sh
+uv run hopwise train --model SPRIGL --dataset ml1m
+```
+
+This finetunes on user-specific reasoning paths and evaluates on the held-out split.
 
 ---
 
@@ -128,6 +163,8 @@ This work builds directly on [hopwise](https://github.com/tail-unica/hopwise) by
   doi       = {10.1145/3746252.3761641}
 }
 ```
+
+This research was funded in whole or in part by the Austrian Science Fund (FWF): \href{https://doi.org/10.55776/COE12}{10.55776/COE12}, \href{https://doi.org/10.55776/DFH23}{10.55776/DFH23}, \href{https://doi.org/10.55776/P36413}{10.55776/P36413}.
 
 ---
 

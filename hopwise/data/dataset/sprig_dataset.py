@@ -10,6 +10,7 @@ import pickle
 
 import numpy as np
 
+from hopwise.data import Interaction
 from hopwise.data.dataset import KnowledgePathDataset
 from hopwise.data.dataset.kgglm_dataset import _generate_paths_random_walks
 from hopwise.data.semantic_vocab import SemanticVocab
@@ -90,13 +91,21 @@ class SPRIGDataset(KnowledgePathDataset):
         self.layered_semantic_ids = bool(
             self.config["layered_semantic_ids"] if "layered_semantic_ids" in self.config else False
         )
+        self.resolve_semantic_id_collisions = bool(
+            self.config["resolve_semantic_id_collisions"]
+            if "resolve_semantic_id_collisions" in self.config
+            else False
+        )
 
         if self.train_stage == "finetune":
             # Exact length: BOS + U + H*(R + 1 intermediate token) + 2*N SEM tokens + EOS
             # = 2*H + 2*N + 1  (intermediate nodes are always 1 token — entity or user)
             self.token_sequence_length = 2 * self.path_hop_length + 2 * self.semantic_ids_per_item + 1
         else:
-            self.token_sequence_length = 2 + self.pretrain_hop_length[1] * (self.semantic_ids_per_item + 2)
+            # Worst case: every node in the walk is an item (N SEM tokens each).
+            # h+1 nodes, h relations, +2 for BOS/EOS, maximized at h = max_hop.
+            max_hop = self.pretrain_hop_length[1]
+            self.token_sequence_length = (max_hop + 1) * self.semantic_ids_per_item + max_hop + 2
 
         # Always clamp context_length to the exact computed length so the tokenizer
         # does not pad paths shorter than context_length.  Padding tokens inside
@@ -155,18 +164,40 @@ class SPRIGDataset(KnowledgePathDataset):
             seen[key] = iid
 
         if duplicate:
-            self.logger.warning(
-                "SPRIG: %d semantic ID collision(s) found in %s. "
-                "Colliding items are unreachable during generation (last-wins). "
-                "Re-run semantic ID assignment to eliminate collisions.",
-                len(duplicate),
-                filepath,
-            )
+            if self.resolve_semantic_id_collisions:
+                self.logger.warning(
+                    "SPRIG: %d semantic ID collision(s) found in %s. "
+                    "resolve_semantic_id_collisions=True: colliding items will get one "
+                    "code position re-drawn until unique.",
+                    len(duplicate),
+                    filepath,
+                )
+            else:
+                self.logger.warning(
+                    "SPRIG: %d semantic ID collision(s) found in %s. "
+                    "Colliding items are unreachable during generation (last-wins). "
+                    "Re-run semantic ID assignment, or set resolve_semantic_id_collisions: True, "
+                    "to eliminate collisions.",
+                    len(duplicate),
+                    filepath,
+                )
         return mapping
 
     # ------------------------------------------------------------------
     # Tokenizer (replaces parent's I-token version)
     # ------------------------------------------------------------------
+
+    def _extra_vocab_segments(self) -> list[np.ndarray]:
+        """Additional token-array segments appended to the vocab after USER/SEM/ENTITY.
+
+        Overridable so relation-free variants (e.g. SPRIGT) can drop the
+        RELATION token block entirely without duplicating the rest of
+        ``_init_tokenizer``.
+        """
+        return [
+            np.char.add(PathLanguageModelingTokenType.RELATION.token,
+                        np.arange(self.relation_num).astype(str)),
+        ]
 
     def _init_tokenizer(self):
         from tokenizers import Tokenizer, pre_tokenizers
@@ -206,8 +237,7 @@ class SPRIGDataset(KnowledgePathDataset):
             sem_token_array,
             np.char.add(PathLanguageModelingTokenType.ENTITY.token,
                         entity_range.astype(str)),
-            np.char.add(PathLanguageModelingTokenType.RELATION.token,
-                        np.arange(self.relation_num).astype(str)),
+            *self._extra_vocab_segments(),
         ])
 
         tokenizer_model_cls = getattr(token_models, self.tokenizer_model)
@@ -269,6 +299,7 @@ class SPRIGDataset(KnowledgePathDataset):
             self._internal_semantic_mapping,
             self._tokenizer,
             self.semantic_ids_per_item,
+            resolve_collisions=self.resolve_semantic_id_collisions,
             layered=self.layered_semantic_ids,
         )
 
@@ -276,21 +307,16 @@ class SPRIGDataset(KnowledgePathDataset):
     # Path formatting — items → N SEM tokens
     # ------------------------------------------------------------------
 
-    def _format_path(self, path: np.ndarray) -> str | None:
-        """Convert a raw relation-interleaved path array to a token string.
+    def _path_node_token_lists(self, path_nodes) -> list[list[str]] | None:
+        """Map each raw vertex ID in ``path_nodes`` to its token list.
 
-        Item nodes are expanded to N space-separated SEM tokens.
-        Returns ``None`` if any item in the path lacks a semantic mapping —
-        the caller must skip such paths.
+        User/entity vertices map to a single token; item vertices expand to
+        N SEM tokens. Returns ``None`` if any item in the path lacks a
+        semantic mapping — the caller must skip such paths.
         """
-        path = path[path != self.PATH_PADDING]
-        path_nodes = path[::2]       # positions 0, 2, 4 … → node vertex IDs
-        path_relations = path[1::2]  # positions 1, 3, 5 … → relation IDs
-
         graph_min_iid = self.user_num
         graph_max_iid = self.user_num + self.item_num - 1
 
-        # Build per-node token lists.
         node_token_lists: list[list[str]] = []
         for node in path_nodes:
             n = int(node)
@@ -319,6 +345,22 @@ class SPRIGDataset(KnowledgePathDataset):
                 node_token_lists.append(
                     [PathLanguageModelingTokenType.ENTITY.token + str(n - self.user_num)]
                 )
+        return node_token_lists
+
+    def _format_path(self, path: np.ndarray) -> str | None:
+        """Convert a raw relation-interleaved path array to a token string.
+
+        Item nodes are expanded to N space-separated SEM tokens.
+        Returns ``None`` if any item in the path lacks a semantic mapping —
+        the caller must skip such paths.
+        """
+        path = path[path != self.PATH_PADDING]
+        path_nodes = path[::2]       # positions 0, 2, 4 … → node vertex IDs
+        path_relations = path[1::2]  # positions 1, 3, 5 … → relation IDs
+
+        node_token_lists = self._path_node_token_lists(path_nodes)
+        if node_token_lists is None:
+            return None
 
         relation_tokens = [
             PathLanguageModelingTokenType.RELATION.token + str(int(r))
@@ -456,8 +498,56 @@ class SPRIGDataset(KnowledgePathDataset):
         return result
 
     # ------------------------------------------------------------------
+    # Tokenization (overrides parent — SPRIG paths have variable length)
+    # ------------------------------------------------------------------
+
+    def tokenize_path_dataset(self):
+        """Tokenize the path dataset, tolerating trailing padding.
+
+        Unlike KGGLM's fixed-width I-tokens, SPRIG items expand to
+        ``semantic_ids_per_item`` tokens while non-item nodes stay at 1
+        token, so paths have variable real length and most get right-padded
+        below ``context_length``. The parent's mask (``KnowledgePathDataset.
+        tokenize_path_dataset``) rejects any row containing a special token
+        in ``path[1:-1]``, which — for right-padded rows — always includes
+        the trailing [PAD]/EOS shift and discards the row. That silently
+        drops the majority of SPRIG pretrain data. This override checks
+        only the real (non-padded) interior of each row, via attention_mask.
+        """
+        if self._tokenized_dataset is None:
+            path_rows = [path for path in self.path_dataset.splitlines() if path.strip()]
+            if not path_rows:
+                raise ValueError(
+                    "Path dataset is empty — no valid paths were generated. "
+                    "Check path_sample_args (strategy, restrict_by_phase, temporal_causality) "
+                    "and that the KG has entity connections between items."
+                )
+            tokenized_dataset = self.tokenize(path_rows)
+            tokenized_dataset = Interaction(tokenized_dataset.data)
+            special_ids = set(self.tokenizer.all_special_ids)
+            correct_path_mask = [
+                all(
+                    int(tok) not in special_ids
+                    for tok in path[1 : int(attn_mask.sum()) - 1]
+                )
+                for path, attn_mask in zip(
+                    tokenized_dataset["input_ids"], tokenized_dataset["attention_mask"]
+                )
+            ]
+            tokenized_dataset = tokenized_dataset[correct_path_mask]
+            self._tokenized_dataset = tokenized_dataset
+
+    # ------------------------------------------------------------------
     # CKG and used-ID helpers (required by the framework)
     # ------------------------------------------------------------------
+
+    def _edge_relation_token(self, rel_id: int, vocab: dict) -> int:
+        """Map a raw relation id to the token id used to key ``get_tokenized_ckg``'s
+        inner dict. Overridable so relation-free variants (e.g. SPRIGT), whose
+        vocab has no RELATION tokens, can supply a placeholder instead of a
+        vocab lookup that would KeyError.
+        """
+        return vocab[PathLanguageModelingTokenType.RELATION.token + str(rel_id)]
 
     def get_tokenized_ckg(self) -> dict:
         """Return the CKG as ``head_tok → rel_tok → set(tail_tok_tuple)``.
@@ -493,7 +583,7 @@ class SPRIGDataset(KnowledgePathDataset):
                 skipped_edges += 1
                 continue
             rel_id = rel_field[e["type"]]
-            rel_tok = vocab[PathLanguageModelingTokenType.RELATION.token + str(rel_id)]
+            rel_tok = self._edge_relation_token(rel_id, vocab)
 
             # Add both directions (graph is undirected).
             for h, t in ((head_tup, tail_tup), (tail_tup, head_tup)):
